@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Construtor 3D — Monte qualquer objeto</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #e9eaec;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #1d1d1f;
+  }
+  canvas { display: block; }
+
+  #ui, #side {
+    position: fixed; z-index: 10;
+    padding: 14px 14px 12px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.80);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.13);
+    user-select: none;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  #ui   { top: 16px; left: 16px;  width: 250px; }
+  #side { top: 16px; right: 16px; width: 250px; }
+
+  #ui h1, #side h1 { font-size: 14.5px; margin: 0 0 5px; letter-spacing: .2px; font-weight: 700; }
+  .hint { font-size: 11px; color: #6b6b70; line-height: 1.45; margin: 0 0 12px; }
+  .hint.small { margin: 10px 0 0; font-size: 10px; color: #8a8a8f; text-align: center; line-height: 1.5; }
+
+  .sect {
+    font-size: 10px; font-weight: 700; letter-spacing: .8px;
+    text-transform: uppercase; color: #8a8a8f; margin: 12px 0 6px;
+  }
+  .sect.first { margin-top: 0; }
+
+  .shapes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+  .shapes button, .tools button, .wide {
+    font-family: inherit; font-size: 11.5px; font-weight: 600;
+    padding: 8px 6px; border-radius: 9px; cursor: pointer;
+    border: 1px solid #dcdce0; background: #fff; color: #1d1d1f;
+    transition: background .15s, border-color .15s, transform .08s;
+  }
+  .shapes button:hover, .tools button:hover, .wide:hover { background: #f5f5f7; border-color: #c8c8cf; }
+  .shapes button:active, .wide:active { transform: scale(0.98); }
+
+  .tools { display: flex; gap: 6px; }
+  .tools button { flex: 1; }
+  .tools button.active { background: #1d1d1f; color: #fff; border-color: #1d1d1f; }
+
+  .wide { display: block; width: 100%; margin-bottom: 6px; text-align: center; }
+  .wide.danger { color: #b3261e; }
+  .wide.danger:hover { background: #fdf1f0; border-color: #f0c9c5; }
+
+  .list {
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 190px; overflow-y: auto; margin-bottom: 4px; padding-right: 2px;
+  }
+  .obj {
+    padding: 7px 9px; border-radius: 8px; background: #fff;
+    border: 1px solid #e3e3e7; font-size: 11.5px; font-weight: 600;
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: background .12s, border-color .12s;
+  }
+  .obj:hover { border-color: #c8c8cf; }
+  .obj.sel { background: #1d1d1f; border-color: #1d1d1f; color: #fff; }
+  .empty { font-size: 11px; color: #9a9aa0; padding: 6px 2px; line-height: 1.4; }
+
+  #props.hidden { display: none; }
+
+  .btn {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; font-weight: 600;
+    padding: 8px 10px; margin-bottom: 4px;
+    border-radius: 9px; cursor: pointer;
+    background: #fff; border: 1px solid #dcdce0;
+    transition: background .15s, border-color .15s;
+  }
+  .btn:hover { background: #f5f5f7; border-color: #c8c8cf; }
+
+  .fname {
+    font-size: 10px; color: #8a8a8f; margin: 0 0 8px 3px;
+    height: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fname.ok { color: #2f8f4e; }
+
+  .field {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 11px; font-weight: 600; color: #4a4a4f; margin: 7px 0;
+  }
+  .field input[type=color] {
+    width: 44px; height: 24px; padding: 0; background: #fff;
+    border: 1px solid #dcdce0; border-radius: 6px; cursor: pointer;
+  }
+  .field input[type=range] { flex: 1; max-width: 118px; accent-color: #1d1d1f; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 28px; z-index: 20;
+    transform: translate(-50%, 10px);
+    background: rgba(29, 29, 31, 0.92); color: #fff;
+    font-size: 12px; font-weight: 600;
+    padding: 9px 16px; border-radius: 999px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .25s, transform .25s;
+    max-width: 80vw; text-align: center;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 760px) {
+    #ui, #side { width: calc(50vw - 22px); padding: 11px; }
+    .shapes { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= PAINEL ESQUERDO: CRIAR / FERRAMENTAS ================= -->
+<div id="ui">
+  <h1>Construtor 3D</h1>
+  <p class="hint">Adicione formas, mova, gire e escale. Aplique textura em cada peça e una objetos para construir qualquer coisa.</p>
+
+  <div class="sect first">Adicionar forma</div>
+  <div class="shapes" id="shapes"></div>
+
+  <div class="sect">Ferramenta</div>
+  <div class="tools" id="tools">
+    <button data-mode="translate" class="active">Mover</button>
+    <button data-mode="rotate">Girar</button>
+    <button data-mode="scale">Escalar</button>
+  </div>
+
+  <div class="sect">Ações</div>
+  <button class="wide" id="dupBtn">Duplicar seleção</button>
+  <button class="wide" id="mergeBtn">Unir selecionados</button>
+  <button class="wide danger" id="delBtn">Excluir seleção</button>
+  <button class="wide" id="clearBtn">Limpar cena</button>
+
+  <p class="hint small">W / E / R trocam a ferramenta · Delete apaga · Ctrl+D duplica · Shift+clique soma à seleção</p>
+</div>
+
+<!-- ================= PAINEL DIREITO: LISTA + PROPRIEDADES ================= -->
+<div id="side">
+  <h1>Objetos</h1>
+  <div id="objList" class="list"></div>
+
+  <div id="props" class="hidden">
+    <div class="sect">Propriedades</div>
+
+    <label class="btn">
+      🖼️ Textura da peça
+      <input type="file" id="texInput" accept="image/*" hidden>
+    </label>
+    <div class="fname" id="texName">sem textura</div>
+    <button class="wide" id="clearTexBtn">Remover textura</button>
+
+    <div class="field"><span>Cor</span><input type="color" id="colorInput" value="#b9b5ae"></div>
+    <div class="field"><span>Rugosidade</span><input type="range" id="roughInput" min="0" max="1" step="0.01" value="0.85"></div>
+    <div class="field"><span>Metal</span><input type="range" id="metalInput" min="0" max="1" step="0.01" value="0"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+/* ============================================================
+   RENDERER / CENA / CÂMERA
+   ============================================================ */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xe9eaec);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 800);
+camera.position.set(7.5, 6, 9.5);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.minDistance = 1.2;
+controls.maxDistance = 160;
+controls.target.set(0, 1.2, 0);
+
+/* ============================================================
+   LUZES
+   ============================================================ */
+const hemi = new THREE.HemisphereLight(0xffffff, 0xb6bec6, 0.9);
+scene.add(hemi);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 2.3);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(2048, 2048);
+dirLight.shadow.bias = -0.0005;
+dirLight.shadow.normalBias = 0.02;
+{
+  const sc = dirLight.shadow.camera;
+  sc.left = -22; sc.right = 22; sc.top = 22; sc.bottom = -22;
+  sc.near = 0.5; sc.far = 90;
+  sc.updateProjectionMatrix();
+}
+scene.add(dirLight, dirLight.target);
+
+const LIGHT_OFFSET = new THREE.Vector3(14, 22, 11);
+
+const fillLight = new THREE.DirectionalLight(0xdfe6ff, 0.55);
+fillLight.position.set(-9, 7, -8);
+scene.add(fillLight);
+
+/* ============================================================
+   CHÃO + GRADE DE APOIO
+   ============================================================ */
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(400, 400),
+  new THREE.MeshStandardMaterial({ color: 0xf1f2f4, roughness: 1, metalness: 0 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.012;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const grid = new THREE.GridHelper(200, 100, 0xc4c8ce, 0xdadde2);
+grid.position.y = -0.005;
+grid.material.transparent = true;
+grid.material.opacity = 0.65;
+scene.add(grid);
+
+/* ============================================================
+   GIZMO DE TRANSFORMAÇÃO
+   ============================================================ */
+const transform = new TransformControls(camera, renderer.domElement);
+transform.setSize(0.85);
+transform.addEventListener('dragging-changed', (e) => { controls.enabled = !e.value; });
+scene.add(transform);
+
+/* caixa de destaque da seleção */
+const selBox = new THREE.BoxHelper(new THREE.Object3D(), 0x1d6ef2);
+selBox.visible = false;
+selBox.material.depthTest = false;
+selBox.material.transparent = true;
+selBox.material.opacity = 0.85;
+selBox.renderOrder = 999;
+scene.add(selBox);
+
+/* ============================================================
+   FORMAS DISPONÍVEIS
+   ============================================================ */
+const SHAPES = {
+  box:      { label: 'Caixa',     geo: () => new THREE.BoxGeometry(1.4, 1.4, 1.4) },
+  sphere:   { label: 'Esfera',    geo: () => new THREE.SphereGeometry(0.85, 32, 24) },
+  cylinder: { label: 'Cilindro',  geo: () => new THREE.CylinderGeometry(0.6, 0.6, 1.6, 28) },
+  cone:     { label: 'Cone',      geo: () => new THREE.ConeGeometry(0.8, 1.6, 28) },
+  capsule:  { label: 'Cápsula',   geo: () => new THREE.CapsuleGeometry(0.5, 0.9, 10, 20) },
+  torus:    { label: 'Toro',      geo: () => new THREE.TorusGeometry(0.7, 0.26, 18, 48) },
+  icosa:    { label: 'Icosaedro', geo: () => new THREE.IcosahedronGeometry(0.9, 1) },
+  plane:    { label: 'Plano',     geo: () => new THREE.PlaneGeometry(1.8, 1.8, 1, 1) },
+};
+
+/* ============================================================
+   ESTADO
+   ============================================================ */
+const counters = {};
+let selected = [];        // meshes selecionados (o último é o "principal")
+let spawnIndex = 0;       // distribui novos objetos em espiral ao redor do alvo
+
+const sceneObjects = () => scene.children.filter((o) => o.userData.isModelObject);
+const materialsOf  = (mesh) => (Array.isArray(mesh.material) ? mesh.material : [mesh.material]);
+const primaryObj   = () => (selected.length ? selected[selected.length - 1] : null);
+
+/* ============================================================
+   TOAST
+   ============================================================ */
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1900);
+}
+
+/* ============================================================
+   CRIAÇÃO DE OBJETOS
+   ============================================================ */
+function addShape(kind) {
+  const def = SHAPES[kind];
+  const geo = def.geo();
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox;
+
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(Math.random(), 0.10, 0.68),
+    roughness: 0.85,
+    metalness: 0.0,
+    side: THREE.DoubleSide            // planos visíveis dos dois lados
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.isModelObject = true;
+
+  counters[kind] = (counters[kind] || 0) + 1;
+  mesh.name = `${def.label} ${counters[kind]}`;
+
+  // distribuição em espiral (ângulo áureo) ao redor do ponto que a câmera olha
+  const ang = spawnIndex * 2.39996;
+  const rad = 1.15 * Math.sqrt(spawnIndex);
+  spawnIndex++;
+
+  mesh.position.set(
+    controls.target.x + Math.cos(ang) * rad,
+    -bb.min.y,                                  // apoiado no chão
+    controls.target.z + Math.sin(ang) * rad
+  );
+
+  scene.add(mesh);
+  setSelection([mesh]);
+  setMode('translate');
+  toast(`${mesh.name} adicionado`);
+}
+
+/* ============================================================
+   SELEÇÃO
+   ============================================================ */
+function setSelection(list) {
+  selected = list.filter((m) => m && m.parent);
+
+  const p = primaryObj();
+  if (p) {
+    transform.attach(p);
+    selBox.setFromObject(p);
+    selBox.visible = true;
+  } else {
+    transform.detach();
+    selBox.visible = false;
+  }
+  refreshUI();
+}
+
+function toggleSelection(mesh) {
+  const i = selected.indexOf(mesh);
+  if (i >= 0) setSelection(selected.filter((x) => x !== mesh));
+  else setSelection([...selected, mesh]);
+}
+
+/* ============================================================
+   FERRAMENTAS
+   ============================================================ */
+function setMode(mode) {
+  transform.setMode(mode);
+  document.querySelectorAll('#tools button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+}
+
+/* ============================================================
+   APAGAR / DUPLICAR / LIMPAR
+   ============================================================ */
+function disposeObject(m) {
+  scene.remove(m);
+  if (m.geometry) m.geometry.dispose();
+  materialsOf(m).forEach((mat) => mat.dispose());
+  if (m.userData.pieces) {
+    m.userData.pieces.forEach((p) => { p.geometry.dispose(); p.material.dispose(); });
+  }
+}
+
+function deleteSelected() {
+  if (!selected.length) return;
+  const n = selected.length;
+  selected.slice().forEach(disposeObject);
+  setSelection([]);
+  toast(n > 1 ? `${n} objetos excluídos` : 'Objeto excluído');
+}
+
+function clearScene() {
+  const objs = sceneObjects();
+  if (!objs.length) { toast('A cena já está vazia'); return; }
+  objs.forEach(disposeObject);
+  setSelection([]);
+  spawnIndex = 0;
+  toast('Cena limpa');
+}
+
+function duplicateSelected() {
+  if (!selected.length) return;
+
+  const copies = selected.map((m) => {
+    const geo = m.geometry.clone();
+    const c = new THREE.Mesh(geo, null);
+
+    if (m.userData.pieces) {
+      // objeto unido: mantém 1 material por peça, na mesma ordem dos grupos
+      const pieces = m.userData.pieces.map((p) => ({
+        geometry: p.geometry.clone(),
+        material: p.material.clone()
+      }));
+      c.material = pieces.map((p) => p.material);
+      c.userData = { isModelObject: true, pieces };
+    } else {
+      c.material = m.material.clone();
+      c.userData = { isModelObject: true };
+    }
+
+    c.castShadow = c.receiveShadow = true;
+    c.name = m.name + ' (cópia)';
+    c.position.copy(m.position).x += 1.4;
+    c.quaternion.copy(m.quaternion);
+    c.scale.copy(m.scale);
+
+    scene.add(c);
+    return c;
+  });
+
+  setSelection(copies);
+  toast('Seleção duplicada');
+}
+
+/* ============================================================
+   UNIR OBJETOS (merge de geometrias, preservando materiais)
+   ============================================================ */
+function mergeSelected() {
+  if (selected.length < 2) {
+    toast('Selecione 2 ou mais objetos (Shift+clique)');
+    return;
+  }
+
+  scene.updateMatrixWorld(true);
+
+  const geos = [];
+  const mats = [];
+
+  for (const m of selected) {
+    const mw = m.matrixWorld;
+    // peças de um objeto já unido, ou o próprio mesh
+    const pieces = m.userData.pieces || [{ geometry: m.geometry, material: m.material }];
+
+    for (const p of pieces) {
+      let g = p.geometry.clone();
+      g.applyMatrix4(mw);                                   // "assa" a transformação
+      if (g.index) { const ng = g.toNonIndexed(); g.dispose(); g = ng; }
+      // só position/normal/uv para o merge não falhar
+      for (const name of Object.keys(g.attributes)) {
+        if (name !== 'position' && name !== 'normal' && name !== 'uv') g.deleteAttribute(name);
+      }
+      geos.push(g);
+      mats.push(p.material);
+    }
+  }
+
+  const merged = mergeGeometries(geos, true);               // true = cria grupos por peça
+  if (!merged) {
+    geos.forEach((g) => g.dispose());
+    toast('Não foi possível unir estas peças');
+    return;
+  }
+  merged.computeBoundingBox();
+  merged.computeBoundingSphere();
+
+  // remove os originais (as peças continuam vivas para futuras uniões)
+  selected.slice().forEach((m) => {
+    scene.remove(m);
+    if (m.userData.pieces) m.geometry.dispose();            // geometria do mesh unido é descartável
+  });
+
+  const obj = new THREE.Mesh(merged, mats);
+  obj.castShadow = obj.receiveShadow = true;
+  obj.userData.isModelObject = true;
+  obj.userData.pieces = geos.map((g, i) => ({ geometry: g, material: mats[i] }));
+
+  counters.union = (counters.union || 0) + 1;
+  obj.name = `União ${counters.union}`;
+
+  scene.add(obj);
+  setSelection([obj]);
+  toast(`${geos.length} peças unidas em um único objeto`);
+}
+
+/* ============================================================
+   TEXTURAS
+   ============================================================ */
+const textureLoader = new THREE.TextureLoader();
+const maxAniso = renderer.capabilities.getMaxAnisotropy();
+
+const texInput   = document.getElementById('texInput');
+const texName    = document.getElementById('texName');
+const colorInput = document.getElementById('colorInput');
+const roughInput = document.getElementById('roughInput');
+const metalInput = document.getElementById('metalInput');
+
+texInput.addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  texInput.value = '';
+  if (!file || !selected.length) return;
+
+  const targets = selected.slice();          // congela a seleção no momento do upload
+  const url = URL.createObjectURL(file);
+
+  textureLoader.load(
+    url,
+    (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.anisotropy = maxAniso;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = true;
+      tex.userData.fileName = file.name;
+
+      targets.forEach((m) => materialsOf(m).forEach((mat) => {
+        mat.map = tex;
+        mat.color.set(0xffffff);               // mostra a textura sem tingir
+        mat.needsUpdate = true;
+      }));
+
+      URL.revokeObjectURL(url);
+      refreshUI();
+      toast('Textura aplicada');
+    },
+    undefined,
+    () => {
+      URL.revokeObjectURL(url);
+      toast('Não foi possível carregar a imagem');
+    }
+  );
+});
+
+document.getElementById('clearTexBtn').addEventListener('click', () => {
+  if (!selected.length) return;
+  selected.forEach((m) => materialsOf(m).forEach((mat) => {
+    mat.map = null;
+    mat.needsUpdate = true;
+  }));
+  refreshUI();
+  toast('Textura removida');
+});
+
+/* cor / rugosidade / metal — aplicados a toda a seleção */
+colorInput.addEventListener('input', () => {
+  selected.forEach((m) => materialsOf(m).forEach((mat) => mat.color.set(colorInput.value)));
+});
+roughInput.addEventListener('input', () => {
+  const v = parseFloat(roughInput.value);
+  selected.forEach((m) => materialsOf(m).forEach((mat) => { mat.roughness = v; }));
+});
+metalInput.addEventListener('input', () => {
+  const v = parseFloat(metalInput.value);
+  selected.forEach((m) => materialsOf(m).forEach((mat) => { mat.metalness = v; }));
+});
+
+/* ============================================================
+   INTERFACE (lista + propriedades)
+   ============================================================ */
+const objList = document.getElementById('objList');
+const props   = document.getElementById('props');
+
+function refreshUI() {
+  /* --- lista de objetos --- */
+  objList.innerHTML = '';
+  const objs = sceneObjects();
+
+  if (!objs.length) {
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = 'Nenhum objeto ainda. Adicione uma forma no painel à esquerda.';
+    objList.appendChild(e);
+  } else {
+    objs.forEach((m) => {
+      const el = document.createElement('div');
+      el.className = 'obj' + (selected.includes(m) ? ' sel' : '');
+      el.textContent = m.name;
+      el.title = 'Clique para selecionar · Shift+clique para somar à seleção';
+      el.addEventListener('click', (ev) => {
+        if (ev.shiftKey) toggleSelection(m);
+        else setSelection([m]);
+      });
+      objList.appendChild(el);
+    });
+  }
+
+  /* --- propriedades do objeto principal --- */
+  const p = primaryObj();
+  props.classList.toggle('hidden', !p);
+  if (!p) return;
+
+  const mat = materialsOf(p)[0];
+  colorInput.value = '#' + mat.color.getHexString();
+  roughInput.value = mat.roughness;
+  metalInput.value = mat.metalness;
+
+  const map = mat.map;
+  texName.textContent = map ? (map.userData.fileName || 'textura aplicada') : 'sem textura';
+  texName.classList.toggle('ok', !!map);
+}
+
+/* ============================================================
+   CLIQUES NO VIEWPORT (seleção por raycast)
+   ============================================================ */
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+let pointerDown = null;
+
+function pick(cx, cy) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.x = ((cx - r.left) / r.width) * 2 - 1;
+  ndc.y = -((cy - r.top) / r.height) * 2 + 1;
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects(sceneObjects(), false);
+  return hits.length ? hits[0].object : null;
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  if (transform.axis) { pointerDown = null; return; }   // clique começou no gizmo
+  pointerDown = { x: e.clientX, y: e.clientY };
+});
+
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (e.button !== 0 || !pointerDown) return;
+  const moved = Math.hypot(e.clientX - pointerDown.x, e.clientY - pointerDown.y);
+  pointerDown = null;
+  if (moved > 4) return;                                // foi arrasto de órbita
+
+  const hit = pick(e.clientX, e.clientY);
+  if (hit) {
+    if (e.shiftKey) toggleSelection(hit);
+    else setSelection([hit]);
+  } else if (!e.shiftKey) {
+    setSelection([]);
+  }
+});
+
+/* ============================================================
+   ATALHOS
+   ============================================================ */
+window.addEventListener('keydown', (e) => {
+  const tag = (e.target.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  const k = e.key.toLowerCase();
+  if (k === 'w') setMode('translate');
+  else if (k === 'e') setMode('rotate');
+  else if (k === 'r') setMode('scale');
+  else if (k === 'delete' || k === 'backspace') { e.preventDefault(); deleteSelected(); }
+  else if ((e.ctrlKey || e.metaKey) && k === 'd') { e.preventDefault(); duplicateSelected(); }
+  else if (k === 'escape') setSelection([]);
+});
+
+/* ============================================================
+   BOTÕES
+   ============================================================ */
+const shapesEl = document.getElementById('shapes');
+for (const [kind, def] of Object.entries(SHAPES)) {
+  const b = document.createElement('button');
+  b.textContent = def.label;
+  b.addEventListener('click', () => addShape(kind));
+  shapesEl.appendChild(b);
+}
+
+document.querySelectorAll('#tools button').forEach((b) => {
+  b.addEventListener('click', () => setMode(b.dataset.mode));
+});
+
+document.getElementById('dupBtn').addEventListener('click', duplicateSelected);
+document.getElementById('mergeBtn').addEventListener('click', mergeSelected);
+document.getElementById('delBtn').addEventListener('click', deleteSelected);
+document.getElementById('clearBtn').addEventListener('click', clearScene);
+
+/* ============================================================
+   START
+   ============================================================ */
+addShape('box');            // objeto inicial para o usuário ver o gizmo funcionando
+setSelection([]);           // mas começa sem seleção (só a lista mostra o objeto)
+refreshUI();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+renderer.setAnimationLoop(() => {
+  controls.update();
+
+  // a luz (e o mapa de sombra) acompanham o ponto que a câmera olha
+  dirLight.target.position.copy(controls.target);
+  dirLight.position.copy(controls.target).add(LIGHT_OFFSET);
+
+  const p = primaryObj();
+  if (p && selBox.visible) selBox.setFromObject(p);
+
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

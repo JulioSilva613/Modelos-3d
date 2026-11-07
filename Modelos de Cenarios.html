@@ -1,0 +1,1613 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Estúdio de cena · Three.js</title>
+
+  <style>
+    body { margin: 0; overflow: hidden; background: #0a0c10; font-family: system-ui, sans-serif; }
+    canvas { display: block; }
+    #info {
+      position: fixed; left: 18px; bottom: 16px;
+      color: #cfc8b8; font: 12px system-ui, sans-serif;
+      text-shadow: 0 1px 5px #000; pointer-events: none; z-index: 10; opacity: .9;
+    }
+    #drop-overlay {
+      position: fixed; inset: 10px; z-index: 50; display: none;
+      align-items: center; justify-content: center;
+      border: 3px dashed rgba(240,225,190,.35); border-radius: 18px;
+      background: rgba(20,18,15,.78); backdrop-filter: blur(4px);
+      color: #f1ead9; font: 600 20px system-ui, sans-serif;
+      letter-spacing: .03em; pointer-events: none; text-align: center; padding: 20px;
+    }
+    body.arrastando #drop-overlay { display: flex; }
+    .lil-gui { --width: 320px; }
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+
+  <input type="file" id="arquivo" accept="image/*" hidden>
+  <div id="info">Arraste para girar · solte uma imagem para o solo · ajuste tudo no painel →</div>
+  <div id="drop-overlay"><div>Solte a imagem de solo aqui</div></div>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import GUI from "three/addons/libs/lil-gui.module.min.js";
+
+    /* =========================================================
+       Utilidades gerais
+       ========================================================= */
+    function suave(a, b, x) {
+      const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+      return t * t * (3 - 2 * t);
+    }
+
+    function texturaSuave() {
+      const s = 128;
+      const cv = document.createElement("canvas");
+      cv.width = cv.height = s;
+      const ctx = cv.getContext("2d");
+      const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+      g.addColorStop(0.0, "rgba(255,255,255,1)");
+      g.addColorStop(0.25, "rgba(255,255,255,0.55)");
+      g.addColorStop(0.6, "rgba(255,255,255,0.14)");
+      g.addColorStop(1.0, "rgba(255,255,255,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, s, s);
+      const t = new THREE.CanvasTexture(cv);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    }
+
+    /* =========================================================
+       Textura procedural de solo pedregoso (com semente)
+       ========================================================= */
+    function criarCanvasPedregoso(seed = 0) {
+      const largura = 1024, altura = 1024;
+      const canvas = document.createElement("canvas");
+      canvas.width = largura; canvas.height = altura;
+      const ctx = canvas.getContext("2d");
+
+      // RNG determinístico
+      let estado = (seed | 0) * 12347 + 1;
+      if (estado <= 0) estado = 1;
+      const rand = () => {
+        estado = (estado * 16807) % 2147483647;
+        return (estado - 1) / 2147483646;
+      };
+
+      ctx.fillStyle = "#29271f";
+      ctx.fillRect(0, 0, largura, altura);
+
+      for (let i = 0; i < 9000; i++) {
+        const x = rand() * largura;
+        const y = rand() * altura;
+        const r = 3 + rand() * 24;
+        const tom = rand();
+        ctx.fillStyle = tom > 0.55
+          ? `rgba(133,119,91,${0.025 + rand() * 0.08})`
+          : `rgba(0,0,0,${0.03 + rand() * 0.12})`;
+        ctx.beginPath();
+        ctx.ellipse(x, y, r, r * (0.35 + rand() * 0.6),
+          rand() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (let i = 0; i < 15500; i++) {
+        const x = rand() * largura;
+        const y = rand() * altura;
+        const tamanho = 1.5 + Math.pow(rand(), 2) * 9;
+        const achatamento = 0.45 + rand() * 0.65;
+        const rotacao = rand() * Math.PI;
+        const paleta = [
+          [83, 76, 60], [105, 96, 76], [65, 62, 52],
+          [128, 116, 91], [48, 47, 41], [145, 132, 105]
+        ];
+        const cor = paleta[Math.floor(rand() * paleta.length)];
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(rotacao);
+        ctx.fillStyle = "rgba(0,0,0,0.52)";
+        ctx.beginPath();
+        ctx.ellipse(1.4, 2, tamanho * 1.1, tamanho * achatamento * 1.1, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgb(${cor[0]},${cor[1]},${cor[2]})`;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, tamanho, tamanho * achatamento, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(224,205,164,0.18)";
+        ctx.beginPath();
+        ctx.ellipse(-tamanho * 0.2, -tamanho * 0.22,
+          tamanho * 0.52, tamanho * achatamento * 0.3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      for (let i = 0; i < 70000; i++) {
+        const x = rand() * largura;
+        const y = rand() * altura;
+        const r = rand() * 1.4;
+        const claro = rand() > 0.52;
+        ctx.fillStyle = claro
+          ? `rgba(207,190,153,${rand() * 0.24})`
+          : `rgba(0,0,0,${rand() * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      return canvas;
+    }
+
+    /* =========================================================
+       Ruído determinístico para o relevo do terreno
+       ========================================================= */
+    function hash2(x, y, seed) {
+      let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(seed, 69069);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      h ^= h >>> 16;
+      return (h >>> 0) / 4294967295;
+    }
+    function ruidoValor(x, y, seed) {
+      const xi = Math.floor(x), yi = Math.floor(y);
+      const xf = x - xi, yf = y - yi;
+      const u = xf * xf * (3 - 2 * xf);
+      const v = yf * yf * (3 - 2 * yf);
+      const a = hash2(xi, yi, seed);
+      const b = hash2(xi + 1, yi, seed);
+      const c = hash2(xi, yi + 1, seed);
+      const d = hash2(xi + 1, yi + 1, seed);
+      return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+    }
+    function fbm(x, y, seed, oitavas) {
+      let amp = 1, freq = 1, soma = 0, norm = 0;
+      for (let i = 0; i < oitavas; i++) {
+        soma += amp * ruidoValor(x * freq, y * freq, seed + i * 101);
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2;
+      }
+      return soma / norm;
+    }
+
+    /* =========================================================
+       PARÂMETROS (bloco substituído na exportação)
+       ========================================================= */
+    // __PARAMS_START__
+    const params = {
+      // --- tempo ---
+      hora: 18.3,
+      autoTempo: false,
+      velocidadeTempo: 0.5,
+
+      // --- céu / estrelas / luz ---
+      estrelas: 1.0,
+      tamanhoEstrelas: 1.0,
+      tamanhoSol: 1.0,
+      intensidadeSol: 3.0,
+      intensidadeLua: 0.55,
+      ambiente: 1.0,
+      exposicao: 1.05,
+
+      // --- nuvens ---
+      nuvens: true,
+      cobertura: 0.48,
+      opacidadeNuvens: 0.9,
+      velocidadeNuvens: 1.0,
+      altitudeNuvens: 90,
+      escalaNuvens: 6.0,
+      corNuvens: "#ffffff",
+
+      // --- chuva ---
+      chuva: false,
+      qtdChuva: 2600,
+      velocidadeChuva: 1.0,
+      vento: 6,
+      comprimentoChuva: 1.0,
+      opacidadeChuva: 0.45,
+      corChuva: "#b8d4ee",
+
+      // --- névoa baixa ---
+      nevoa: true,
+      qtdNevoa: 60,
+      opacidadeNevoa: 0.12,
+      corNevoa: "#aab6c8",
+
+      // --- fog ---
+      fogAtivo: true,
+      corFogAuto: true,
+      corFog: "#8fa8c4",
+      fogPerto: 20,
+      fogLonge: 190,
+
+      // --- cena ---
+      chao: true,
+
+      // --- solo: textura ---
+      repeticaoX: 2,
+      repeticaoY: 2,
+      rotacao: 0,
+      brilho: 1,
+      contraste: 1,
+      saturacao: 1,
+      matiz: 0,
+      cor: "#ffffff",
+      forcaCor: 0,
+      contrasteRelevo: 1.25,
+
+      // --- solo: material ---
+      relevo: 0.16,
+      aspereza: 1,
+      metalico: 0,
+
+      // --- solo: terreno ---
+      tamanho: 22,
+      segmentos: 160,
+      altura: 0.05,
+      escalaRelevo: 1.8,
+      oitavas: 3,
+      semente: 7
+    };
+    // __PARAMS_END__
+
+    /* =========================================================
+       Regiões do solo (editáveis / serializáveis)
+       ========================================================= */
+    // __REGIOES_START__
+    const regioes = [];
+    // __REGIOES_END__
+
+    /* =========================================================
+       Renderer / cena / câmera / controles
+       ========================================================= */
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(
+      50, window.innerWidth / window.innerHeight, 0.1, 5000
+    );
+    camera.position.set(14, 10, 22);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = params.exposicao;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 2, 0);
+    controls.enableDamping = true;
+    controls.enablePan = false;
+    controls.maxPolarAngle = Math.PI * 0.495;
+    controls.minDistance = 3;
+    controls.maxDistance = 90;
+
+    const maxAniso = renderer.capabilities.getMaxAnisotropy();
+
+    /* =========================================================
+       Céu (shader)
+       ========================================================= */
+    const skyU = {
+      uTop:          { value: new THREE.Color("#2f6fc0") },
+      uHorizon:      { value: new THREE.Color("#b7d3ea") },
+      uBottom:       { value: new THREE.Color("#0a0a0c") },
+      uSunDir:       { value: new THREE.Vector3(0, 1, 0) },
+      uSunColor:     { value: new THREE.Color("#fff4d6") },
+      uSunSize:      { value: 0.006 },
+      uSunIntensity: { value: 1.0 },
+      uMoonDir:      { value: new THREE.Vector3(0, -1, 0) },
+      uMoonIntensity:{ value: 0.0 },
+      uNight:        { value: 0.0 }
+    };
+
+    const skyMat = new THREE.ShaderMaterial({
+      uniforms: skyU,
+      vertexShader: /* glsl */`
+        varying vec3 vWorldPos;
+        void main() {
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vWorldPos = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: /* glsl */`
+        varying vec3 vWorldPos;
+        uniform vec3  uTop;
+        uniform vec3  uHorizon;
+        uniform vec3  uBottom;
+        uniform vec3  uSunColor;
+        uniform vec3  uSunDir;
+        uniform vec3  uMoonDir;
+        uniform float uSunSize;
+        uniform float uSunIntensity;
+        uniform float uMoonIntensity;
+        uniform float uNight;
+
+        void main() {
+          vec3 dir = normalize(vWorldPos);
+          float y = dir.y;
+
+          vec3 col = mix(uHorizon, uTop, pow(clamp(y, 0.0, 1.0), 0.55));
+          col = mix(col, uBottom, clamp(-y * 4.0, 0.0, 1.0));
+
+          float sd = max(dot(dir, normalize(uSunDir)), 0.0);
+          float glow = pow(sd, 8.0) * 0.25 + pow(sd, 60.0) * 0.6;
+          float disc = smoothstep(1.0 - uSunSize, 1.0 - uSunSize * 0.35, sd);
+          col += uSunColor * (glow * 0.6 + disc * 2.4) * uSunIntensity;
+
+          float md = max(dot(dir, normalize(uMoonDir)), 0.0);
+          float moonDisc = smoothstep(1.0 - uSunSize * 0.8, 1.0 - uSunSize * 0.2, md);
+          float moonGlow = pow(md, 350.0) * 0.5;
+          col += vec3(0.80, 0.87, 1.0) * (moonDisc * 1.6 + moonGlow) * uMoonIntensity;
+
+          col += uHorizon * exp(-abs(y) * 12.0) * 0.12 * (1.0 - uNight);
+
+          gl_FragColor = vec4(col, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false
+    });
+
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(1000, 48, 24), skyMat);
+    sky.renderOrder = -10;
+    sky.frustumCulled = false;
+    scene.add(sky);
+
+    /* =========================================================
+       Estrelas
+       ========================================================= */
+    const N_ESTRELAS = 3500;
+    const starGeo = new THREE.BufferGeometry();
+    {
+      const pos = new Float32Array(N_ESTRELAS * 3);
+      const phase = new Float32Array(N_ESTRELAS);
+      const size = new Float32Array(N_ESTRELAS);
+      for (let i = 0; i < N_ESTRELAS; i++) {
+        const u = Math.random() * 2 - 1;
+        const th = Math.random() * Math.PI * 2;
+        const s = Math.sqrt(1 - u * u);
+        const v = new THREE.Vector3(Math.cos(th) * s, Math.abs(u), Math.sin(th) * s).normalize();
+        v.multiplyScalar(800);
+        pos[i * 3] = v.x; pos[i * 3 + 1] = v.y; pos[i * 3 + 2] = v.z;
+        phase[i] = Math.random();
+        size[i] = 0.7 + Math.pow(Math.random(), 3) * 3.6;
+      }
+      starGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      starGeo.setAttribute("aPhase", new THREE.BufferAttribute(phase, 1));
+      starGeo.setAttribute("aSize", new THREE.BufferAttribute(size, 1));
+    }
+
+    const starU = {
+      uTime:       { value: 0 },
+      uOpacity:    { value: 1 },
+      uSizeMul:    { value: 1 },
+      uPixelRatio: { value: renderer.getPixelRatio() },
+      uColor:      { value: new THREE.Color("#ffffff") }
+    };
+
+    const stars = new THREE.Points(starGeo, new THREE.ShaderMaterial({
+      uniforms: starU,
+      vertexShader: /* glsl */`
+        attribute float aPhase;
+        attribute float aSize;
+        uniform float uTime;
+        uniform float uPixelRatio;
+        uniform float uSizeMul;
+        varying float vTw;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          float tw = 0.6 + 0.4 * sin(uTime * 1.6 + aPhase * 6.2831);
+          vTw = tw;
+          gl_PointSize = aSize * uSizeMul * uPixelRatio * (1200.0 / max(-mv.z, 1.0));
+        }
+      `,
+      fragmentShader: /* glsl */`
+        uniform float uOpacity;
+        uniform vec3 uColor;
+        varying float vTw;
+        void main() {
+          float d = length(gl_PointCoord - 0.5);
+          float a = smoothstep(0.5, 0.02, d);
+          gl_FragColor = vec4(uColor, a * vTw * uOpacity);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    }));
+    stars.frustumCulled = false;
+    scene.add(stars);
+
+    /* =========================================================
+       Nuvens
+       ========================================================= */
+    const cloudU = {
+      uTime:     { value: 0 },
+      uScale:    { value: 6.0 },
+      uSpeed:    { value: 1.0 },
+      uCoverage: { value: 0.48 },
+      uOpacity:  { value: 0.9 },
+      uColor:    { value: new THREE.Color("#ffffff") },
+      uShadow:   { value: new THREE.Color("#8090a8") }
+    };
+
+    const cloudMat = new THREE.ShaderMaterial({
+      uniforms: cloudU,
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */`
+        varying vec2 vUv;
+        uniform float uTime;
+        uniform float uScale;
+        uniform float uSpeed;
+        uniform float uCoverage;
+        uniform float uOpacity;
+        uniform vec3  uColor;
+        uniform vec3  uShadow;
+
+        float hash(vec2 p) {
+          p = fract(p * vec2(123.34, 456.21));
+          p += dot(p, p + 45.32);
+          return fract(p.x * p.y);
+        }
+        float noise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          float a = hash(i);
+          float b = hash(i + vec2(1.0, 0.0));
+          float c = hash(i + vec2(0.0, 1.0));
+          float d = hash(i + vec2(1.0, 1.0));
+          return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+        }
+        float fbm(vec2 p) {
+          float v = 0.0;
+          float a = 0.5;
+          for (int i = 0; i < 5; i++) {
+            v += a * noise(p);
+            p = p * 2.03 + vec2(11.3, 7.9);
+            a *= 0.5;
+          }
+          return v;
+        }
+        void main() {
+          vec2 c = vUv - 0.5;
+          float edge = smoothstep(0.5, 0.18, length(c));
+
+          vec2 p = vUv * uScale + vec2(uTime * uSpeed * 0.010, uTime * uSpeed * 0.004);
+          float n = fbm(p) * 0.72 + fbm(p * 2.9 + 21.7) * 0.28;
+
+          float th = 1.0 - uCoverage;
+          float a = smoothstep(th, th + 0.22, n) * edge * uOpacity;
+          if (a < 0.004) discard;
+
+          vec3 col = mix(uShadow, uColor, smoothstep(th, th + 0.5, n));
+          gl_FragColor = vec4(col, a);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: false
+    });
+
+    const cloudMesh = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), cloudMat);
+    cloudMesh.rotation.x = -Math.PI / 2;
+    cloudMesh.position.y = params.altitudeNuvens;
+    scene.add(cloudMesh);
+
+    /* =========================================================
+       Luzes
+       ========================================================= */
+    const sol = new THREE.DirectionalLight(0xfff2d0, 2.5);
+    sol.castShadow = true;
+    sol.shadow.mapSize.set(2048, 2048);
+    sol.shadow.camera.near = 1;
+    sol.shadow.camera.far = 140;
+    sol.shadow.bias = -0.0006;
+    scene.add(sol);
+
+    const lua = new THREE.DirectionalLight(0x9fb8ff, 0.5);
+    scene.add(lua);
+
+    const hemi = new THREE.HemisphereLight(0x9fc0ff, 0x2a231c, 0.8);
+    scene.add(hemi);
+
+    /* =========================================================
+       Solo: material, terreno e chão contínuo
+       ========================================================= */
+    const materialSolo = new THREE.MeshStandardMaterial({
+      color: new THREE.Color("#ffffff"),
+      roughness: params.aspereza,
+      metalness: params.metalico,
+      bumpScale: params.relevo
+    });
+
+    let solo = null;
+
+    // Chão distante — agora texturizado com a mesma textura do solo
+    const materialChao = new THREE.MeshStandardMaterial({
+      color: new THREE.Color("#ffffff"),
+      roughness: 1,
+      metalness: 0,
+      bumpScale: 0.02
+    });
+    const chao = new THREE.Mesh(new THREE.PlaneGeometry(1400, 1400), materialChao);
+    chao.rotation.x = -Math.PI / 2;
+    chao.position.y = -0.005;
+    chao.receiveShadow = true;
+    scene.add(chao);
+
+    // __FONTE_IMAGEM__
+    let fonteImagem = criarCanvasPedregoso(0);
+    // __FIM_FONTE_IMAGEM__
+
+    let canvasTexturaAtual = null;
+    let precisaTextura = false;
+    let precisaTerreno = false;
+    const agendarTextura = () => { precisaTextura = true; };
+    const agendarTerreno = () => { precisaTerreno = true; };
+
+    const SUPORTA_FILTRO = (() => {
+      const c = document.createElement("canvas").getContext("2d");
+      c.filter = "brightness(0.5)";
+      return c.filter === "brightness(0.5)";
+    })();
+
+    function ajustarPixelsManualmente(ctx, w, h, brilho, contraste, saturacao) {
+      const img = ctx.getImageData(0, 0, w, h);
+      const d = img.data;
+      const c = contraste, b = brilho, s = saturacao;
+      for (let i = 0; i < d.length; i += 4) {
+        let r = d[i], g = d[i + 1], bl = d[i + 2];
+        const lum = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+        r = lum + (r - lum) * s;
+        g = lum + (g - lum) * s;
+        bl = lum + (bl - lum) * s;
+        r = ((r / 255 - 0.5) * c + 0.5) * b * 255;
+        g = ((g / 255 - 0.5) * c + 0.5) * b * 255;
+        bl = ((bl / 255 - 0.5) * c + 0.5) * b * 255;
+        d[i] = r; d[i + 1] = g; d[i + 2] = bl;
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+
+    function atualizarTexturas() {
+      if (!fonteImagem) return;
+      const lf = fonteImagem.width || fonteImagem.naturalWidth;
+      const lh = fonteImagem.height || fonteImagem.naturalHeight;
+      if (!lf || !lh) return;
+
+      const MAX_LADO = 2048;
+      const esc = Math.min(1, MAX_LADO / Math.max(lf, lh));
+      const w = Math.max(1, Math.round(lf * esc));
+      const h = Math.max(1, Math.round(lh * esc));
+
+      // Mapa de cor
+      const cvCor = document.createElement("canvas");
+      cvCor.width = w; cvCor.height = h;
+      const ctx = cvCor.getContext("2d");
+
+      if (SUPORTA_FILTRO) {
+        ctx.filter = `brightness(${params.brilho}) contrast(${params.contraste}) ` +
+                     `saturate(${params.saturacao}) hue-rotate(${params.matiz}deg)`;
+        ctx.drawImage(fonteImagem, 0, 0, w, h);
+        ctx.filter = "none";
+      } else {
+        ctx.drawImage(fonteImagem, 0, 0, w, h);
+        ajustarPixelsManualmente(ctx, w, h, params.brilho, params.contraste, params.saturacao);
+      }
+
+      if (params.forcaCor > 0.001) {
+        ctx.globalCompositeOperation = "multiply";
+        ctx.globalAlpha = params.forcaCor;
+        ctx.fillStyle = params.cor;
+        ctx.fillRect(0, 0, w, h);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "source-over";
+      }
+
+      // Mapa de relevo (grayscale)
+      const cvBump = document.createElement("canvas");
+      cvBump.width = w; cvBump.height = h;
+      const ctxR = cvBump.getContext("2d");
+      if (SUPORTA_FILTRO) {
+        ctxR.filter = `grayscale(1) contrast(${params.contrasteRelevo})`;
+        ctxR.drawImage(cvCor, 0, 0);
+        ctxR.filter = "none";
+      } else {
+        ctxR.drawImage(cvCor, 0, 0);
+      }
+
+      const mapTex = new THREE.CanvasTexture(cvCor);
+      mapTex.colorSpace = THREE.SRGBColorSpace;
+      const bumpTex = new THREE.CanvasTexture(cvBump);
+      bumpTex.colorSpace = THREE.NoColorSpace;
+
+      [mapTex, bumpTex].forEach((t) => {
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.repeat.set(params.repeticaoX, params.repeticaoY);
+        t.center.set(0.5, 0.5);
+        t.rotation = params.rotacao;
+        t.anisotropy = maxAniso;
+        t.needsUpdate = true;
+      });
+
+      if (materialSolo.map) materialSolo.map.dispose();
+      if (materialSolo.bumpMap) materialSolo.bumpMap.dispose();
+
+      materialSolo.map = mapTex;
+      materialSolo.bumpMap = bumpTex;
+      materialSolo.bumpScale = params.relevo;
+      materialSolo.color.set("#ffffff");
+      materialSolo.needsUpdate = true;
+
+      // Chão distante: mesma textura, densidade de texel casada com o solo
+      const densidadeX = params.repeticaoX / Math.max(0.001, params.tamanho);
+      const densidadeY = params.repeticaoY / Math.max(0.001, params.tamanho);
+      const repChaoX = Math.max(1, Math.round(1400 * densidadeX));
+      const repChaoY = Math.max(1, Math.round(1400 * densidadeY));
+
+      const mapChao = mapTex.clone();
+      mapChao.repeat.set(repChaoX, repChaoY);
+      mapChao.needsUpdate = true;
+      const bumpChao = bumpTex.clone();
+      bumpChao.repeat.set(repChaoX, repChaoY);
+      bumpChao.needsUpdate = true;
+
+      if (materialChao.map) materialChao.map.dispose();
+      if (materialChao.bumpMap) materialChao.bumpMap.dispose();
+      materialChao.map = mapChao;
+      materialChao.bumpMap = bumpChao;
+      materialChao.bumpScale = 0.02;
+      materialChao.needsUpdate = true;
+
+      canvasTexturaAtual = cvCor;
+    }
+
+    /* =========================================================
+       Terreno: geometria, altura por FBM com fade nas bordas
+       ========================================================= */
+    function alturaTerreno(x, z) {
+      const n = fbm(x * params.escalaRelevo, z * params.escalaRelevo,
+                    params.semente, params.oitavas);
+      // Altura sempre positiva (0 .. 2*altura) para casar com chao em y≈0
+      let h = n * 2 * params.altura;
+
+      // Fade de borda: zera nas proximidades da borda do terreno
+      const halfSize = params.tamanho / 2;
+      const edgeDist = Math.min(halfSize - Math.abs(x), halfSize - Math.abs(z));
+      const fadeWidth = Math.min(halfSize * 0.22, 5);
+      const fade = suave(0, fadeWidth, Math.max(0, edgeDist));
+      return h * fade;
+    }
+
+    function construirSolo() {
+      if (solo) {
+        scene.remove(solo);
+        solo.geometry.dispose();
+      }
+
+      const seg = Math.max(4, Math.round(params.segmentos));
+      const geo = new THREE.PlaneGeometry(params.tamanho, params.tamanho, seg, seg);
+      geo.rotateX(-Math.PI / 2);
+
+      const pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i);
+        const z = pos.getZ(i);
+        pos.setY(i, alturaTerreno(x, z));
+      }
+      geo.computeVertexNormals();
+
+      solo = new THREE.Mesh(geo, materialSolo);
+      solo.receiveShadow = true;
+      solo.castShadow = true;
+      scene.add(solo);
+
+      // Ajusta câmera de sombra ao tamanho do terreno
+      const meia = Math.max(6, params.tamanho * 0.62);
+      const cam = sol.shadow.camera;
+      cam.left = -meia; cam.right = meia;
+      cam.top = meia;   cam.bottom = -meia;
+      cam.updateProjectionMatrix();
+
+      reconstruirRegioes();
+    }
+
+    /* =========================================================
+       Regiões: patches circulares que acompanham o relevo
+       ========================================================= */
+    function gerarTexturaRegiao(reg) {
+      const canvas = criarCanvasPedregoso(reg.seed);
+      const w = canvas.width, h = canvas.height;
+
+      // Ajustes de cor por filtro (ou manual)
+      if (SUPORTA_FILTRO) {
+        const cv = document.createElement("canvas");
+        cv.width = w; cv.height = h;
+        const c2 = cv.getContext("2d");
+        c2.filter = `brightness(${reg.brilho}) contrast(${reg.contraste}) ` +
+                    `saturate(${reg.saturacao}) hue-rotate(${reg.matiz}deg)`;
+        c2.drawImage(canvas, 0, 0);
+        c2.filter = "none";
+        if (reg.forcaCor > 0.001) {
+          c2.globalCompositeOperation = "multiply";
+          c2.globalAlpha = reg.forcaCor;
+          c2.fillStyle = reg.cor;
+          c2.fillRect(0, 0, w, h);
+        }
+        return cv;
+      } else {
+        const ctx = canvas.getContext("2d");
+        ajustarPixelsManualmente(ctx, w, h, reg.brilho, reg.contraste, reg.saturacao);
+        if (reg.forcaCor > 0.001) {
+          ctx.globalCompositeOperation = "multiply";
+          ctx.globalAlpha = reg.forcaCor;
+          ctx.fillStyle = reg.cor;
+          ctx.fillRect(0, 0, w, h);
+        }
+        return canvas;
+      }
+    }
+
+    function construirRegiao(reg) {
+      if (reg.mesh) {
+        scene.remove(reg.mesh);
+        reg.mesh.geometry.dispose();
+        if (reg.mesh.material.map) reg.mesh.material.map.dispose();
+        if (reg.mesh.material.alphaMap) reg.mesh.material.alphaMap.dispose();
+        reg.mesh.material.dispose();
+        reg.mesh = null;
+      }
+
+      const cv = gerarTexturaRegiao(reg);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(reg.repeticao, reg.repeticao);
+      tex.anisotropy = maxAniso;
+
+      // Mapa alfa radial
+      const ac = document.createElement("canvas");
+      ac.width = ac.height = 256;
+      const actx = ac.getContext("2d");
+      const grad = actx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      grad.addColorStop(0.0, "white");
+      grad.addColorStop(0.7, "white");
+      grad.addColorStop(1.0, "black");
+      actx.fillStyle = grad;
+      actx.fillRect(0, 0, 256, 256);
+      const alphaTex = new THREE.CanvasTexture(ac);
+
+      const geo = new THREE.CircleGeometry(reg.raio, 72);
+      geo.rotateX(-Math.PI / 2);
+      const pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const lx = pos.getX(i);
+        const lz = pos.getZ(i);
+        const wx = lx + reg.x;
+        const wz = lz + reg.z;
+        pos.setY(i, alturaTerreno(wx, wz) + 0.006);
+      }
+      geo.computeVertexNormals();
+
+      const mat = new THREE.MeshStandardMaterial({
+        map: tex,
+        alphaMap: alphaTex,
+        transparent: true,
+        depthWrite: false,
+        roughness: params.aspereza,
+        metalness: params.metalico,
+        opacity: reg.opacidade,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2
+      });
+
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(reg.x, 0, reg.z);
+      mesh.receiveShadow = true;
+      mesh.renderOrder = 1;
+      scene.add(mesh);
+
+      reg.mesh = mesh;
+    }
+
+    function reconstruirRegioes() {
+      for (const reg of regioes) construirRegiao(reg);
+    }
+
+    /* =========================================================
+       Chuva
+       ========================================================= */
+    class Chuva {
+      constructor(max = 6000) {
+        this.max = max;
+        this.head = new Float32Array(max * 3);
+        this.vel = new Float32Array(max);
+        this.len = new Float32Array(max);
+        this.pos = new Float32Array(max * 6);
+        this.area = 170;
+        this.topo = 75;
+
+        this.geo = new THREE.BufferGeometry();
+        this.geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
+        this.geo.setDrawRange(0, 0);
+
+        this.mat = new THREE.LineBasicMaterial({
+          color: 0xb8d4ee, transparent: true, opacity: 0.45,
+          depthWrite: false, fog: false
+        });
+
+        this.lines = new THREE.LineSegments(this.geo, this.mat);
+        this.lines.frustumCulled = false;
+
+        for (let i = 0; i < max; i++) this.reset(i, true);
+      }
+      reset(i, inicial) {
+        const i3 = i * 3;
+        this.head[i3]     = (Math.random() - 0.5) * this.area;
+        this.head[i3 + 1] = inicial ? Math.random() * this.topo
+                                    : this.topo * (0.85 + Math.random() * 0.4);
+        this.head[i3 + 2] = (Math.random() - 0.5) * this.area;
+        this.vel[i] = 0.7 + Math.random() * 0.8;
+        this.len[i] = 1.2 + Math.random() * 2.4;
+      }
+      update(dt, cfg) {
+        const n = Math.min(cfg.qtd, this.max);
+        const vento = cfg.vento;
+        const velBase = cfg.velocidade * 55;
+        for (let i = 0; i < n; i++) {
+          const i3 = i * 3;
+          let x = this.head[i3];
+          let y = this.head[i3 + 1];
+          let z = this.head[i3 + 2];
+          y -= this.vel[i] * velBase * dt;
+          x += vento * dt;
+          if (y < 0.3 || Math.abs(x) > this.area * 0.6) {
+            this.reset(i, false);
+            x = this.head[i3]; y = this.head[i3 + 1]; z = this.head[i3 + 2];
+          }
+          this.head[i3] = x;
+          this.head[i3 + 1] = y;
+          this.head[i3 + 2] = z;
+          const L = this.len[i] * cfg.comprimento;
+          const k = i * 6;
+          this.pos[k]     = x;
+          this.pos[k + 1] = y;
+          this.pos[k + 2] = z;
+          this.pos[k + 3] = x - vento * 0.06;
+          this.pos[k + 4] = y + L;
+          this.pos[k + 5] = z;
+        }
+        this.geo.setDrawRange(0, n * 2);
+        this.geo.attributes.position.needsUpdate = true;
+        this.mat.opacity = cfg.opacidade;
+        this.mat.color.set(cfg.cor);
+      }
+    }
+
+    const chuva = new Chuva();
+    scene.add(chuva.lines);
+
+    /* =========================================================
+       Névoa baixa (partículas)
+       ========================================================= */
+    class CampoParticulas {
+      constructor(max, textura, sizeScale = 300) {
+        this.max = max;
+        this.sizeScale = sizeScale;
+
+        this.pos = new Float32Array(max * 3);
+        this.alpha = new Float32Array(max);
+        this.size = new Float32Array(max);
+        this.baseSize = new Float32Array(max);
+        this.speed = new Float32Array(max);
+        this.life = new Float32Array(max);
+        this.maxLife = new Float32Array(max);
+        this.windX = new Float32Array(max);
+        this.windZ = new Float32Array(max);
+
+        this.geo = new THREE.BufferGeometry();
+        this.geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
+        this.geo.setAttribute("aAlpha", new THREE.BufferAttribute(this.alpha, 1));
+        this.geo.setAttribute("aSize", new THREE.BufferAttribute(this.size, 1));
+        this.geo.setDrawRange(0, 0);
+
+        this.mat = new THREE.ShaderMaterial({
+          uniforms: {
+            uMap:        { value: textura },
+            uColor:      { value: new THREE.Color("#ffffff") },
+            uOpacity:    { value: 1 },
+            uPixelRatio: { value: renderer.getPixelRatio() },
+            uSizeScale:  { value: sizeScale }
+          },
+          vertexShader: /* glsl */`
+            attribute float aAlpha;
+            attribute float aSize;
+            uniform float uPixelRatio;
+            uniform float uSizeScale;
+            varying float vAlpha;
+            void main() {
+              vec4 mv = modelViewMatrix * vec4(position, 1.0);
+              gl_Position = projectionMatrix * mv;
+              float s = aSize * uSizeScale / max(-mv.z, 1.0);
+              gl_PointSize = clamp(s, 1.0, 900.0) * uPixelRatio;
+              vAlpha = aAlpha;
+            }
+          `,
+          fragmentShader: /* glsl */`
+            uniform sampler2D uMap;
+            uniform vec3 uColor;
+            uniform float uOpacity;
+            varying float vAlpha;
+            void main() {
+              vec4 t = texture2D(uMap, gl_PointCoord);
+              float a = t.a * vAlpha * uOpacity;
+              if (a < 0.002) discard;
+              gl_FragColor = vec4(uColor, a);
+            }
+          `,
+          transparent: true,
+          depthWrite: false
+        });
+
+        this.points = new THREE.Points(this.geo, this.mat);
+        this.points.frustumCulled = false;
+      }
+
+      reset(i, cfg) {
+        const i3 = i * 3;
+        this.pos[i3]     = (Math.random() - 0.5) * cfg.area;
+        this.pos[i3 + 1] = cfg.yBase + Math.random() * cfg.ySpread;
+        this.pos[i3 + 2] = (Math.random() - 0.5) * cfg.area;
+        this.baseSize[i] = cfg.tamanho * (0.6 + Math.random() * 0.8);
+        this.size[i]     = this.baseSize[i];
+        this.speed[i]    = cfg.velocidade * (0.5 + Math.random());
+        this.life[i]     = Math.random() * cfg.vida * 0.8;
+        this.maxLife[i]  = cfg.vida * (0.7 + Math.random() * 0.6);
+        this.windX[i]    = (Math.random() - 0.5) * cfg.vento;
+        this.windZ[i]    = (Math.random() - 0.5) * cfg.vento;
+      }
+
+      update(dt, cfg) {
+        const n = Math.min(cfg.qtd, this.max);
+        for (let i = 0; i < n; i++) {
+          this.life[i] += dt;
+          if (this.life[i] > this.maxLife[i]) this.reset(i, cfg);
+
+          const i3 = i * 3;
+          this.pos[i3 + 1] += this.speed[i] * dt;
+          this.pos[i3]     += this.windX[i] * dt;
+          this.pos[i3 + 2] += this.windZ[i] * dt;
+
+          const f = this.life[i] / this.maxLife[i];
+          const fade = Math.min(1, f / 0.15) * Math.min(1, (1 - f) / 0.35);
+
+          this.alpha[i] = fade;
+          this.size[i] = this.baseSize[i] * (0.7 + f * 1.4);
+        }
+        this.geo.setDrawRange(0, n);
+        this.geo.attributes.position.needsUpdate = true;
+        this.geo.attributes.aAlpha.needsUpdate = true;
+        this.geo.attributes.aSize.needsUpdate = true;
+        this.mat.uniforms.uColor.value.set(cfg.cor);
+        this.mat.uniforms.uOpacity.value = cfg.opacidade;
+      }
+    }
+
+    const texSuave = texturaSuave();
+    const nevoa = new CampoParticulas(220, texSuave, 300);
+    scene.add(nevoa.points);
+
+    /* =========================================================
+       Fog
+       ========================================================= */
+    const fog = new THREE.Fog(0x8899aa, 20, 190);
+    scene.fog = fog;
+
+    /* =========================================================
+       Paletas de cor
+       ========================================================= */
+    const C = {
+      dayTop:    new THREE.Color("#2f6fc0"),
+      dayHor:    new THREE.Color("#b7d3ea"),
+      duskTop:   new THREE.Color("#2a2a52"),
+      duskHor:   new THREE.Color("#ff8a3a"),
+      nightTop:  new THREE.Color("#04060c"),
+      nightHor:  new THREE.Color("#0c1220"),
+      nightHemi: new THREE.Color("#243350"),
+      sunHigh:   new THREE.Color("#fff6e2"),
+      sunLow:    new THREE.Color("#ff8b3d"),
+      dayCloud:  new THREE.Color("#ffffff"),
+      duskCloud: new THREE.Color("#ffb27a"),
+      nightCloud:new THREE.Color("#2b3550")
+    };
+
+    const _top = new THREE.Color();
+    const _hor = new THREE.Color();
+    const _hemiSky = new THREE.Color();
+    const _cloudC = new THREE.Color();
+    const _tmp = new THREE.Color();
+
+    const sunDir = new THREE.Vector3();
+    const moonDir = new THREE.Vector3();
+
+    let ctrlHora = null;
+
+    /* =========================================================
+       Aplicação por frame
+       ========================================================= */
+    function aplicar(dt) {
+      if (params.autoTempo) {
+        params.hora = (params.hora + params.velocidadeTempo * dt) % 24;
+        if (ctrlHora) ctrlHora.updateDisplay();
+      }
+
+      const ang = ((params.hora - 6) / 12) * Math.PI;
+      sunDir.set(Math.cos(ang), Math.sin(ang), 0.32).normalize();
+      moonDir.copy(sunDir).negate();
+      moonDir.z += 0.45;
+      moonDir.normalize();
+
+      const elev = sunDir.y;
+      const dayF = suave(-0.12, 0.30, elev);
+      const duskF = Math.exp(-Math.pow(elev / 0.16, 2));
+      const nightF = 1 - suave(-0.30, 0.06, elev);
+
+      _top.copy(C.nightTop).lerp(C.dayTop, dayF).lerp(C.duskTop, duskF * 0.5);
+      _hor.copy(C.nightHor).lerp(C.dayHor, dayF).lerp(C.duskHor, duskF * 0.8);
+
+      skyU.uTop.value.copy(_top);
+      skyU.uHorizon.value.copy(_hor);
+      skyU.uSunDir.value.copy(sunDir);
+      skyU.uSunColor.value.copy(C.sunLow).lerp(C.sunHigh, suave(0.0, 0.45, elev));
+      skyU.uSunSize.value = 0.006 * params.tamanhoSol;
+      skyU.uSunIntensity.value = suave(-0.14, 0.02, elev) * 1.3;
+      skyU.uMoonDir.value.copy(moonDir);
+      skyU.uMoonIntensity.value = nightF * 1.2;
+      skyU.uNight.value = nightF;
+
+      sol.position.copy(sunDir).multiplyScalar(60);
+      sol.intensity = suave(-0.02, 0.22, elev) * params.intensidadeSol;
+      sol.color.copy(C.sunLow).lerp(C.sunHigh, suave(0.0, 0.5, elev));
+
+      lua.position.copy(moonDir).multiplyScalar(60);
+      lua.intensity = nightF * params.intensidadeLua;
+
+      _hemiSky.copy(C.nightHemi).lerp(_top, Math.max(dayF, 0.35));
+      hemi.color.copy(_hemiSky);
+      hemi.intensity = 0.22 + dayF * params.ambiente * 1.15;
+
+      renderer.toneMappingExposure = params.exposicao;
+
+      starU.uTime.value += dt;
+      starU.uOpacity.value = nightF * params.estrelas;
+      starU.uSizeMul.value = params.tamanhoEstrelas;
+      stars.visible = starU.uOpacity.value > 0.01;
+
+      cloudMesh.visible = params.nuvens;
+      cloudMesh.position.y = params.altitudeNuvens;
+      cloudU.uScale.value = params.escalaNuvens;
+      cloudU.uCoverage.value = params.cobertura;
+      cloudU.uOpacity.value = params.opacidadeNuvens;
+      cloudU.uSpeed.value = params.velocidadeNuvens;
+      cloudU.uTime.value += dt * params.velocidadeNuvens;
+
+      _cloudC.copy(C.nightCloud).lerp(C.dayCloud, dayF).lerp(C.duskCloud, duskF * 0.65);
+      _cloudC.multiply(_tmp.set(params.corNuvens));
+      cloudU.uColor.value.copy(_cloudC);
+      cloudU.uShadow.value.copy(_cloudC).multiplyScalar(0.4);
+
+      fog.color.copy(params.corFogAuto ? _hor : _tmp.set(params.corFog));
+      if (params.fogAtivo) {
+        fog.near = params.fogPerto;
+        fog.far = params.fogLonge;
+      } else {
+        fog.near = 1e5;
+        fog.far = 2e5;
+      }
+
+      chao.visible = params.chao;
+
+      materialSolo.roughness = params.aspereza;
+      materialSolo.metalness = params.metalico;
+      materialSolo.bumpScale = params.relevo;
+      for (const reg of regioes) {
+        if (reg.mesh) {
+          reg.mesh.material.roughness = params.aspereza;
+          reg.mesh.material.metalness = params.metalico;
+          reg.mesh.material.opacity = reg.opacidade;
+        }
+      }
+
+      chuva.lines.visible = params.chuva;
+      if (params.chuva) {
+        chuva.update(dt, {
+          qtd: params.qtdChuva,
+          velocidade: params.velocidadeChuva,
+          vento: params.vento,
+          comprimento: params.comprimentoChuva,
+          opacidade: params.opacidadeChuva,
+          cor: params.corChuva
+        });
+      }
+
+      nevoa.points.visible = params.nevoa;
+      if (params.nevoa) {
+        nevoa.update(dt, {
+          qtd: params.qtdNevoa,
+          area: 130,
+          yBase: 0.1,
+          ySpread: 2.5,
+          tamanho: 14,
+          velocidade: 0.28,
+          vida: 18,
+          vento: 0.35,
+          opacidade: params.opacidadeNevoa,
+          cor: params.corNevoa
+        });
+      }
+    }
+
+    /* =========================================================
+       Construção inicial
+       ========================================================= */
+    construirSolo();
+    atualizarTexturas();
+    reconstruirRegioes();
+
+    /* =========================================================
+       INTERFACE (removida na exportação)
+       ========================================================= */
+    // __GUI_START__
+    const gui = new GUI({ title: "Estúdio de cena" });
+
+    // ---------- Solo ----------
+    const fSolo = gui.addFolder("Solo — textura base");
+    fSolo.add({ upload: () => document.getElementById("arquivo").click() }, "upload")
+         .name("📷 Enviar imagem de solo");
+    fSolo.add({ proc: () => { fonteImagem = criarCanvasPedregoso(0); agendarTextura(); } }, "proc")
+         .name("🎨 Textura procedural");
+    fSolo.add(params, "repeticaoX", 1, 32, 1).name("repetição X").onChange(agendarTextura);
+    fSolo.add(params, "repeticaoY", 1, 32, 1).name("repetição Y").onChange(agendarTextura);
+    fSolo.add(params, "rotacao", -Math.PI, Math.PI, 0.01).name("rotação").onChange(agendarTextura);
+    fSolo.add(params, "brilho", 0.1, 2.5, 0.01).name("brilho").onChange(agendarTextura);
+    fSolo.add(params, "contraste", 0.1, 3, 0.01).name("contraste").onChange(agendarTextura);
+    fSolo.add(params, "saturacao", 0, 3, 0.01).name("saturação").onChange(agendarTextura);
+    fSolo.add(params, "matiz", -180, 180, 1).name("matiz (hue)").onChange(agendarTextura);
+    fSolo.addColor(params, "cor").name("tingimento").onChange(agendarTextura);
+    fSolo.add(params, "forcaCor", 0, 1, 0.01).name("força do tingimento").onChange(agendarTextura);
+    fSolo.add(params, "contrasteRelevo", 0.2, 4, 0.01).name("contraste do relevo").onChange(agendarTextura);
+
+    // ---------- Regiões ----------
+    const fRegioes = gui.addFolder("Regiões do solo (manchas editáveis)");
+
+    function criarRegiaoPadrao() {
+      return {
+        x: 0, z: 0, raio: 5,
+        seed: Math.floor(Math.random() * 999) + 1,
+        brilho: 1, contraste: 1.3, saturacao: 1, matiz: 0,
+        cor: "#ffffff", forcaCor: 0,
+        repeticao: 3, opacidade: 1
+      };
+    }
+
+    function criarGUIregiao(reg) {
+      const idx = regioes.indexOf(reg) + 1;
+      const f = fRegioes.addFolder(`Região ${idx}`);
+      const rebuild = () => construirRegiao(reg);
+      f.add(reg, "x", -40, 40, 0.5).name("posição X").onChange(rebuild);
+      f.add(reg, "z", -40, 40, 0.5).name("posição Z").onChange(rebuild);
+      f.add(reg, "raio", 1, 30, 0.5).name("raio").onChange(rebuild);
+      f.add(reg, "seed", 1, 999, 1).name("variação").onChange(rebuild);
+      f.add(reg, "brilho", 0.1, 2.5, 0.01).name("brilho").onChange(rebuild);
+      f.add(reg, "contraste", 0.1, 3, 0.01).name("contraste").onChange(rebuild);
+      f.add(reg, "saturacao", 0, 3, 0.01).name("saturação").onChange(rebuild);
+      f.add(reg, "matiz", -180, 180, 1).name("matiz (hue)").onChange(rebuild);
+      f.addColor(reg, "cor").name("tingimento").onChange(rebuild);
+      f.add(reg, "forcaCor", 0, 1, 0.01).name("força do tingimento").onChange(rebuild);
+      f.add(reg, "repeticao", 1, 16, 0.5).name("repetição").onChange(rebuild);
+      f.add(reg, "opacidade", 0, 1, 0.01).name("opacidade").onChange(rebuild);
+      f.add({ remover: () => {
+        if (reg.mesh) {
+          scene.remove(reg.mesh);
+          reg.mesh.geometry.dispose();
+          if (reg.mesh.material.map) reg.mesh.material.map.dispose();
+          if (reg.mesh.material.alphaMap) reg.mesh.material.alphaMap.dispose();
+          reg.mesh.material.dispose();
+        }
+        const i = regioes.indexOf(reg);
+        if (i >= 0) regioes.splice(i, 1);
+        f.destroy();
+      }}, "remover").name("🗑️ Remover região");
+      return f;
+    }
+
+    fRegioes.add({ add: () => {
+      const reg = criarRegiaoPadrao();
+      regioes.push(reg);
+      criarGUIregiao(reg);
+      construirRegiao(reg);
+    }}, "add").name("➕ Adicionar região");
+
+    // ---------- Material do solo ----------
+    const fMat = gui.addFolder("Material do solo");
+    fMat.add(params, "relevo", 0, 1, 0.005).name("relevo (bump)")
+        .onChange((v) => { materialSolo.bumpScale = v; });
+    fMat.add(params, "aspereza", 0, 1, 0.01).name("aspereza")
+        .onChange((v) => { materialSolo.roughness = v; });
+    fMat.add(params, "metalico", 0, 1, 0.01).name("metalicidade")
+        .onChange((v) => { materialSolo.metalness = v; });
+
+    // ---------- Forma do terreno ----------
+    const fTer = gui.addFolder("Forma do terreno");
+    fTer.add(params, "tamanho", 6, 80, 0.5).name("tamanho").onChange(agendarTerreno);
+    fTer.add(params, "segmentos", 20, 300, 10).name("subdivisões").onChange(agendarTerreno);
+    fTer.add(params, "altura", 0, 0.8, 0.005).name("altura do relevo").onChange(agendarTerreno);
+    fTer.add(params, "escalaRelevo", 0.2, 6, 0.05).name("frequência do relevo").onChange(agendarTerreno);
+    fTer.add(params, "oitavas", 1, 6, 1).name("oitavas (detalhe)").onChange(agendarTerreno);
+    fTer.add(params, "semente", 1, 999, 1).name("semente").onChange(agendarTerreno);
+
+    // ---------- Tempo ----------
+    const fTempo = gui.addFolder("Tempo");
+    ctrlHora = fTempo.add(params, "hora", 0, 24, 0.01).name("hora do dia");
+    fTempo.add(params, "autoTempo").name("avançar o tempo");
+    fTempo.add(params, "velocidadeTempo", 0.05, 6, 0.05).name("velocidade (h/s)");
+
+    // ---------- Céu ----------
+    const fCeu = gui.addFolder("Céu, sol, lua e estrelas");
+    fCeu.add(params, "estrelas", 0, 2.5, 0.01).name("intensidade das estrelas");
+    fCeu.add(params, "tamanhoEstrelas", 0.3, 3, 0.01).name("tamanho das estrelas");
+    fCeu.add(params, "tamanhoSol", 0.3, 3, 0.01).name("tamanho do sol");
+    fCeu.add(params, "intensidadeSol", 0, 8, 0.05).name("luz do sol");
+    fCeu.add(params, "intensidadeLua", 0, 3, 0.01).name("luz da lua");
+    fCeu.add(params, "ambiente", 0, 3, 0.01).name("luz ambiente");
+    fCeu.add(params, "exposicao", 0.2, 3, 0.01).name("exposição");
+
+    // ---------- Nuvens ----------
+    const fNuvens = gui.addFolder("Nuvens");
+    fNuvens.add(params, "nuvens").name("mostrar nuvens");
+    fNuvens.add(params, "cobertura", 0, 1, 0.01).name("cobertura");
+    fNuvens.add(params, "opacidadeNuvens", 0, 1, 0.01).name("opacidade");
+    fNuvens.add(params, "velocidadeNuvens", 0, 6, 0.01).name("velocidade");
+    fNuvens.add(params, "altitudeNuvens", 30, 200, 1).name("altitude");
+    fNuvens.add(params, "escalaNuvens", 1.5, 16, 0.1).name("escala");
+    fNuvens.addColor(params, "corNuvens").name("tingimento");
+
+    // ---------- Chuva ----------
+    const fChuva = gui.addFolder("Chuva");
+    fChuva.add(params, "chuva").name("ativar chuva");
+    fChuva.add(params, "qtdChuva", 0, 6000, 10).name("gotas");
+    fChuva.add(params, "velocidadeChuva", 0.1, 3, 0.01).name("velocidade");
+    fChuva.add(params, "vento", -30, 30, 0.5).name("vento");
+    fChuva.add(params, "comprimentoChuva", 0.2, 4, 0.01).name("comprimento");
+    fChuva.add(params, "opacidadeChuva", 0, 1, 0.01).name("opacidade");
+    fChuva.addColor(params, "corChuva").name("cor");
+
+    // ---------- Névoa baixa ----------
+    const fNevoa = gui.addFolder("Névoa baixa");
+    fNevoa.add(params, "nevoa").name("ativar névoa");
+    fNevoa.add(params, "qtdNevoa", 0, 220, 1).name("quantidade");
+    fNevoa.add(params, "opacidadeNevoa", 0, 0.6, 0.005).name("opacidade");
+    fNevoa.addColor(params, "corNevoa").name("cor");
+
+    // ---------- Fog ----------
+    const fFog = gui.addFolder("Névoa / Fog");
+    fFog.add(params, "fogAtivo").name("ativar fog");
+    fFog.add(params, "corFogAuto").name("cor automática (horizonte)");
+    fFog.addColor(params, "corFog").name("cor do fog");
+    fFog.add(params, "fogPerto", 0, 200, 1).name("início");
+    fFog.add(params, "fogLonge", 20, 600, 1).name("fim");
+
+    // ---------- Cena ----------
+    const fCena = gui.addFolder("Cena");
+    fCena.add(params, "chao").name("chão distante");
+
+    // ---------- Presets ----------
+    const fPresets = gui.addFolder("Cenários prontos");
+    function aplicarPreset(cfg) {
+      Object.assign(params, cfg);
+      materialSolo.roughness = params.aspereza;
+      materialSolo.metalness = params.metalico;
+      materialSolo.bumpScale = params.relevo;
+      gui.controllersRecursive().forEach((c) => c.updateDisplay());
+      agendarTextura();
+      agendarTerreno();
+    }
+    const presets = {
+      "☀️ Dia claro": {
+        hora: 12.5, autoTempo: false, nuvens: true, cobertura: 0.35,
+        opacidadeNuvens: 0.8, chuva: false, nevoa: false,
+        fogAtivo: true, fogPerto: 40, fogLonge: 320,
+        exposicao: 1.0, corNuvens: "#ffffff"
+      },
+      "🌅 Entardecer": {
+        hora: 18.25, nuvens: true, cobertura: 0.55, opacidadeNuvens: 0.9,
+        corNuvens: "#ffd2a8", chuva: false, nevoa: true,
+        fogAtivo: true, fogPerto: 25, fogLonge: 230, exposicao: 1.1
+      },
+      "🌙 Noite estrelada": {
+        hora: 23.0, nuvens: false, chuva: false, nevoa: false,
+        estrelas: 1.4, fogAtivo: true, fogPerto: 40, fogLonge: 320, exposicao: 1.15
+      },
+      "⛈️ Tempestade": {
+        hora: 14.0, nuvens: true, cobertura: 0.9, opacidadeNuvens: 1.0,
+        corNuvens: "#9aa7b8", chuva: true, qtdChuva: 4500, vento: 14,
+        nevoa: true, opacidadeNevoa: 0.18,
+        fogAtivo: true, fogPerto: 15, fogLonge: 140, exposicao: 0.9
+      },
+      "🌫️ Névoa densa": {
+        hora: 7.5, nuvens: true, cobertura: 0.6, chuva: false,
+        nevoa: true, opacidadeNevoa: 0.3, fogAtivo: true,
+        fogPerto: 6, fogLonge: 80, exposicao: 1.0
+      }
+    };
+    Object.entries(presets).forEach(([nome, cfg]) => {
+      fPresets.add({ f: () => aplicarPreset(cfg) }, "f").name(nome);
+    });
+
+    // ---------- Exportação ----------
+    const fExport = gui.addFolder("Exportar cena");
+
+    function baixarBlob(content, type, name) {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+
+    function obterCodigoFonte() {
+      const scripts = [...document.querySelectorAll('script[type="module"]')];
+      const s = scripts.find((x) => x.textContent.includes("__PARAMS_START__"));
+      return s ? s.textContent : "";
+    }
+
+    function serializarParams() {
+      const lines = Object.entries(params).map(([k, v]) => {
+        const val = typeof v === "string" ? JSON.stringify(v) : String(v);
+        return `    ${k}: ${val}`;
+      });
+      return `{\n${lines.join(",\n")}\n  }`;
+    }
+
+    function serializarRegioes() {
+      return regioes.map((r) => ({
+        x: r.x, z: r.z, raio: r.raio, seed: r.seed,
+        brilho: r.brilho, contraste: r.contraste, saturacao: r.saturacao,
+        matiz: r.matiz, cor: r.cor, forcaCor: r.forcaCor,
+        repeticao: r.repeticao, opacidade: r.opacidade
+      }));
+    }
+
+    function obterFonteDataURL() {
+      if (!fonteImagem) return "";
+      const MAX = 2048;
+      const w = fonteImagem.width || fonteImagem.naturalWidth || 1024;
+      const h = fonteImagem.height || fonteImagem.naturalHeight || 1024;
+      const esc = Math.min(1, MAX / Math.max(w, h));
+      const cv = document.createElement("canvas");
+      cv.width = Math.max(1, Math.round(w * esc));
+      cv.height = Math.max(1, Math.round(h * esc));
+      cv.getContext("2d").drawImage(fonteImagem, 0, 0, cv.width, cv.height);
+      return cv.toDataURL("image/png");
+    }
+
+    function gerarBlocoFonte(dataUrl) {
+      if (!dataUrl) {
+        return `// __FONTE_IMAGEM__
+    let fonteImagem = criarCanvasPedregoso(0);
+    // __FIM_FONTE_IMAGEM__`;
+      }
+      return `// __FONTE_IMAGEM__
+    const SOIL_DATA_URL = ${JSON.stringify(dataUrl)};
+    let fonteImagem = null;
+    {
+      const img = new Image();
+      img.onload = () => { fonteImagem = img; agendarTextura(); };
+      img.onerror = () => { fonteImagem = criarCanvasPedregoso(0); agendarTextura(); };
+      img.src = SOIL_DATA_URL;
+    }
+    // __FIM_FONTE_IMAGEM__`;
+    }
+
+    function prepararCodigoExportado() {
+      const src = obterCodigoFonte();
+      if (!src) return null;
+      const paramsStr = serializarParams();
+      const fonte = obterFonteDataURL();
+      return src
+        .replace(/\/\/ __PARAMS_START__[\s\S]*?\/\/ __PARAMS_END__/,
+          () => `// __PARAMS_START__\n  const params = ${paramsStr};\n  // __PARAMS_END__`)
+        .replace(/\/\/ __FONTE_IMAGEM__[\s\S]*?\/\/ __FIM_FONTE_IMAGEM__/,
+          () => gerarBlocoFonte(fonte))
+        .replace(/\/\/ __REGIOES_START__[\s\S]*?\/\/ __REGIOES_END__/,
+          () => `// __REGIOES_START__\n  const regioes = ${JSON.stringify(serializarRegioes())};\n  // __REGIOES_END__`)
+        .replace(/\/\/ __GUI_START__[\s\S]*?\/\/ __GUI_END__/,
+          "// (controles removidos na exportação)")
+        .replace(/import\s+GUI\s+from\s+"three\/addons\/libs\/lil-gui\.module\.min\.js";\s*\n?/g, "");
+    }
+
+    function baixarHTML() {
+      const code = prepararCodigoExportado();
+      if (!code) { alert("Não foi possível extrair o código da cena."); return; }
+      const html = `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cena procedural · Three.js</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#000}canvas{display:block}</style>
+<script type="importmap">
+{"imports":{
+"three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+"three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+<\/script>
+</head>
+<body>
+<script type="module">
+${code}
+<\/script>
+</body>
+</html>`;
+      baixarBlob(html, "text/html", "cena-procedural.html");
+    }
+
+    function baixarJS() {
+      const code = prepararCodigoExportado();
+      if (!code) { alert("Não foi possível extrair o código da cena."); return; }
+      const js = code
+        .replace(/from "three"/g, 'from "https://unpkg.com/three@0.160.0/build/three.module.js"')
+        .replace(/from "three\/addons\/controls\/OrbitControls.js"/g,
+                 'from "https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js"');
+      const header = `// Cena procedural Three.js — exportada do Estúdio de cena.
+// Compatível com WebGL2. Para usar em vídeo, importe este módulo em uma página
+// com WebGL2 habilitado. Requer Three.js 0.160.0.
+// O objeto "params" e o array "regioes" no topo controlam toda a cena.
+//
+// Exemplo:
+//   <canvas id="c"></canvas>
+//   <script type="importmap">{"imports":{
+//     "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+//     "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+//   }}<\/script>
+//   <script type="module" src="cena-procedural.js"><\/script>
+//
+`;
+      baixarBlob(header + js, "text/javascript", "cena-procedural.js");
+    }
+
+    function baixarTextura() {
+      if (!canvasTexturaAtual) { alert("A textura ainda não foi gerada."); return; }
+      const a = document.createElement("a");
+      a.href = canvasTexturaAtual.toDataURL("image/png");
+      a.download = "textura-solo.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    function baixarCena() {
+      renderer.render(scene, camera);
+      const a = document.createElement("a");
+      a.href = renderer.domElement.toDataURL("image/png");
+      a.download = "cena-solo.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    fExport.add({ f: baixarHTML }, "f").name("⬇️ Baixar cena HTML (.html)");
+    fExport.add({ f: baixarJS }, "f").name("⬇️ Baixar módulo JS (.js)");
+    fExport.add({ f: baixarTextura }, "f").name("⬇️ Baixar textura base do solo (PNG)");
+    fExport.add({ f: baixarCena }, "f").name("⬇️ Baixar render da cena (PNG)");
+
+    /* =========================================================
+       Upload de imagem / drag-and-drop
+       ========================================================= */
+    function carregarArquivo(file) {
+      if (!file || !file.type.startsWith("image/")) {
+        alert("Por favor, envie um arquivo de imagem (JPG, PNG, WEBP...).");
+        return;
+      }
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        fonteImagem = img;
+        URL.revokeObjectURL(url);
+        agendarTextura();
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        alert("Não foi possível carregar a imagem.");
+      };
+      img.src = url;
+    }
+
+    document.getElementById("arquivo")
+      .addEventListener("change", (e) => carregarArquivo(e.target.files[0]));
+
+    let contadorDrag = 0;
+    window.addEventListener("dragenter", (e) => {
+      if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) {
+        contadorDrag++;
+        document.body.classList.add("arrastando");
+      }
+    });
+    window.addEventListener("dragover", (e) => e.preventDefault());
+    window.addEventListener("dragleave", () => {
+      contadorDrag = Math.max(0, contadorDrag - 1);
+      if (contadorDrag === 0) document.body.classList.remove("arrastando");
+    });
+    window.addEventListener("drop", (e) => {
+      e.preventDefault();
+      contadorDrag = 0;
+      document.body.classList.remove("arrastando");
+      const f = e.dataTransfer?.files?.[0];
+      if (f) carregarArquivo(f);
+    });
+    // __GUI_END__
+
+    /* =========================================================
+       Loop de renderização
+       ========================================================= */
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      const pr = renderer.getPixelRatio();
+      starU.uPixelRatio.value = pr;
+      nevoa.mat.uniforms.uPixelRatio.value = pr;
+    });
+
+    let ultimo = performance.now();
+
+    function animar() {
+      requestAnimationFrame(animar);
+
+      const agora = performance.now();
+      const dt = Math.min(0.05, (agora - ultimo) / 1000);
+      ultimo = agora;
+
+      if (precisaTerreno) { precisaTerreno = false; construirSolo(); }
+      if (precisaTextura) { precisaTextura = false; atualizarTexturas(); }
+
+      aplicar(dt);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    animar();
+  </script>
+</body>
+</html>

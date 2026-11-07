@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Árvore 3D Esculpida — Three.js</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #e9eaec;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #1d1d1f;
+  }
+  canvas { display: block; }
+
+  #ui {
+    position: fixed; top: 16px; left: 16px;
+    width: 268px; padding: 16px 16px 14px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.78);
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.13);
+    user-select: none;
+  }
+  #ui h1 {
+    font-size: 14.5px; margin: 0 0 4px; letter-spacing: .2px; font-weight: 700;
+  }
+  #ui .hint {
+    font-size: 11.5px; color: #6b6b70; line-height: 1.45; margin: 0 0 13px;
+  }
+  #ui .hint.small { margin: 12px 0 0; font-size: 10.5px; color: #8a8a8f; text-align: center; }
+
+  .btn {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 600;
+    padding: 9px 11px; margin-bottom: 6px;
+    border-radius: 10px; cursor: pointer;
+    background: #ffffff;
+    border: 1px solid #dcdce0;
+    transition: background .15s, border-color .15s, transform .1s;
+  }
+  .btn:hover { background: #f5f5f7; border-color: #c8c8cf; }
+  .btn:active { transform: scale(0.985); }
+
+  .fname {
+    font-size: 10.5px; color: #8a8a8f;
+    margin: 0 0 11px 3px; height: 13px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fname.ok { color: #2f8f4e; }
+
+  .row { display: flex; gap: 8px; margin-top: 6px; }
+  .row button {
+    flex: 1; font-family: inherit; font-size: 11.5px; font-weight: 600;
+    padding: 9px 6px; border-radius: 10px; cursor: pointer;
+    border: 1px solid #dcdce0; background: #fff; color: #1d1d1f;
+    transition: background .15s, border-color .15s;
+  }
+  .row button:hover { background: #f5f5f7; border-color: #c8c8cf; }
+  .row button.primary { background: #1d1d1f; color: #fff; border-color: #1d1d1f; }
+  .row button.primary:hover { background: #333; }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <h1>Árvore 3D Esculpida</h1>
+  <p class="hint">Modelo cru (argila). Envie imagens para texturizar as plantas e o caule. A sombra é projetada pela luz 3D.</p>
+
+  <label class="btn">
+    🌿 Textura das plantas
+    <input type="file" id="leafInput" accept="image/*" hidden>
+  </label>
+  <div class="fname" id="leafName">nenhuma imagem</div>
+
+  <label class="btn">
+    🪵 Textura do caule/galhos
+    <input type="file" id="trunkInput" accept="image/*" hidden>
+  </label>
+  <div class="fname" id="trunkName">nenhuma imagem</div>
+
+  <div class="row">
+    <button id="regenBtn" class="primary">Gerar outra árvore</button>
+    <button id="resetBtn">Limpar texturas</button>
+  </div>
+
+  <p class="hint small">Arraste para girar · scroll para zoom</p>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+/* ============================================================
+   RENDERER / CENA / CÂMERA
+   ============================================================ */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xe9eaec);
+
+const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 500);
+camera.position.set(9, 7, 11);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.minDistance = 1.5;
+controls.maxDistance = 80;
+controls.target.set(0, 3.5, 0);
+
+/* ============================================================
+   LUZES
+   ============================================================ */
+const hemi = new THREE.HemisphereLight(0xffffff, 0xb6bec6, 0.85);
+scene.add(hemi);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 2.4);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(2048, 2048);
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far = 60;
+dirLight.shadow.bias = -0.0005;
+dirLight.shadow.normalBias = 0.03;
+scene.add(dirLight);
+scene.add(dirLight.target);
+
+const fillLight = new THREE.DirectionalLight(0xdfe6ff, 0.55);
+fillLight.position.set(-8, 6, -7);
+scene.add(fillLight);
+
+/* ============================================================
+   CHÃO
+   ============================================================ */
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(120, 120),
+  new THREE.MeshStandardMaterial({ color: 0xf1f2f4, roughness: 1, metalness: 0 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.01;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* ============================================================
+   MATERIAIS "ESCULTURA CRUA"
+   ============================================================ */
+const trunkMat = new THREE.MeshStandardMaterial({
+  color: 0x9b938a, roughness: 0.92, metalness: 0.0
+});
+const leafMat = new THREE.MeshStandardMaterial({
+  color: 0x99a08f, roughness: 0.88, metalness: 0.0,
+  side: THREE.DoubleSide        // folhas visíveis dos dois lados
+});
+
+const treeGroup = new THREE.Group();
+scene.add(treeGroup);
+
+let trunkMesh = null;
+let leafMesh = null;
+
+/* ============================================================
+   PRNG (mulberry32)
+   ============================================================ */
+let _seed = 1;
+function srand(s) { _seed = (s >>> 0) || 1; }
+function rand() {
+  _seed = (_seed + 0x6D2B79F5) >>> 0;
+  let t = _seed;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+function perpendicularTo(v) {
+  const p = new THREE.Vector3(rand() - 0.5, rand() - 0.5, rand() - 0.5);
+  p.addScaledVector(v, -p.dot(v));
+  if (p.lengthSq() < 1e-6) {
+    p.copy(Math.abs(v.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0));
+    p.addScaledVector(v, -p.dot(v));
+  }
+  return p.normalize();
+}
+
+/* ============================================================
+   TUBO AFUNILADO COM UV CONTÍNUA (caule/galhos)
+   ============================================================ */
+function taperedTube(curve, radiusFn, tubularSegments, radialSegments, tile) {
+  const frames = curve.computeFrenetFrames(tubularSegments, false);
+  const length = Math.max(curve.getLength(), 0.001);
+  const midRadius = Math.max(radiusFn(0.5), 0.001);
+
+  const uRepeat = Math.max(1, Math.round((2 * Math.PI * midRadius) / tile));
+  const vRepeat = length / tile;
+
+  const position = [], normal = [], uv = [], index = [];
+  const P = new THREE.Vector3();
+
+  for (let i = 0; i <= tubularSegments; i++) {
+    const t = i / tubularSegments;
+    curve.getPointAt(t, P);
+    const N = frames.normals[i];
+    const B = frames.binormals[i];
+    const r = radiusFn(t);
+
+    for (let j = 0; j <= radialSegments; j++) {
+      const s = j / radialSegments;
+      const angle = s * Math.PI * 2;
+      const sn = Math.sin(angle);
+      const cs = Math.cos(angle);
+
+      const nx = cs * N.x + sn * B.x;
+      const ny = cs * N.y + sn * B.y;
+      const nz = cs * N.z + sn * B.z;
+
+      position.push(P.x + r * nx, P.y + r * ny, P.z + r * nz);
+      normal.push(nx, ny, nz);
+      uv.push(s * uRepeat, t * vRepeat);
+    }
+  }
+
+  for (let i = 0; i < tubularSegments; i++) {
+    for (let j = 0; j < radialSegments; j++) {
+      const a = (radialSegments + 1) * i + j;
+      const b = (radialSegments + 1) * (i + 1) + j;
+      const c = (radialSegments + 1) * (i + 1) + j + 1;
+      const d = (radialSegments + 1) * i + j + 1;
+      index.push(a, b, d, b, c, d);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(position, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(index);
+  return geo;
+}
+
+/* ============================================================
+   GEOMETRIA DE FOLHA (silhueta + curvatura + UVs 0..1)
+   ============================================================ */
+function createLeafGeometry() {
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0);
+  shape.bezierCurveTo( 0.34, 0.12,  0.36, 0.72, 0, 1.0);
+  shape.bezierCurveTo(-0.36, 0.72, -0.34, 0.12, 0, 0);
+
+  const geo = new THREE.ShapeGeometry(shape, 8);
+  const pos = geo.attributes.position;
+
+  // curvatura suave (folha levemente encurvada e côncava)
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = Math.sin(y * Math.PI) * 0.10 + x * x * 0.55;
+    pos.setZ(i, z);
+  }
+  pos.needsUpdate = true;
+
+  // UVs 0..1 por folha (a textura aparece uma vez em cada folha)
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox;
+  const w = Math.max(bb.max.x - bb.min.x, 1e-4);
+  const h = Math.max(bb.max.y - bb.min.y, 1e-4);
+  const uvs = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    uvs[i * 2]     = (pos.getX(i) - bb.min.x) / w;
+    uvs[i * 2 + 1] = (pos.getY(i) - bb.min.y) / h;
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
+  geo.computeVertexNormals();
+  return geo;
+}
+
+const baseLeafGeo = createLeafGeometry();
+
+/* ============================================================
+   DISPERSÃO DE FOLHAS INDIVIDUAIS
+   ============================================================ */
+function addLeafAt(pos, outwardDir, scale, leafGeos) {
+  // normal da face da folha: aponta para fora, com leve inclinação p/ cima
+  const normal = outwardDir.clone();
+  normal.y += 0.35;
+  normal.x += (rand() - 0.5) * 0.4;
+  normal.z += (rand() - 0.5) * 0.4;
+  if (normal.lengthSq() < 1e-6) normal.set(0, 1, 0);
+  normal.normalize();
+
+  // eixos no plano da folha
+  const tangent   = perpendicularTo(normal);
+  const bitangent = new THREE.Vector3().crossVectors(normal, tangent).normalize();
+
+  // torção aleatória em torno da normal
+  const q = new THREE.Quaternion().setFromAxisAngle(normal, rand() * Math.PI * 2);
+  tangent.applyQuaternion(q);
+  bitangent.applyQuaternion(q);
+
+  const m = new THREE.Matrix4().makeBasis(
+    tangent.multiplyScalar(scale),
+    bitangent.multiplyScalar(scale),
+    normal.multiplyScalar(scale)
+  );
+  m.setPosition(pos);
+
+  const g = baseLeafGeo.clone();
+  g.applyMatrix4(m);
+  leafGeos.push(g);
+}
+
+function scatterLeavesAlongBranch(curve, tStart, tEnd, branchRadius, count, leafGeos) {
+  const baseDist = Math.max(branchRadius * 3.0, 0.12);
+
+  for (let i = 0; i < count; i++) {
+    const t = Math.min(0.999, tStart + rand() * (tEnd - tStart));
+    const center  = curve.getPointAt(t);
+    const tanDir  = curve.getTangentAt(t).normalize();
+
+    const p1 = perpendicularTo(tanDir);
+    const p2 = new THREE.Vector3().crossVectors(tanDir, p1).normalize();
+    const ang = rand() * Math.PI * 2;
+
+    const offset = p1.clone().multiplyScalar(Math.cos(ang))
+      .addScaledVector(p2, Math.sin(ang))
+      .multiplyScalar(baseDist * (0.6 + rand() * 2.4));
+
+    const pos = center.add(offset);
+    const outward = offset.clone().normalize();
+    const scale = 0.20 + rand() * 0.16;
+
+    addLeafAt(pos, outward, scale, leafGeos);
+  }
+}
+
+function scatterLeavesAtTip(center, rad, leafGeos) {
+  const spread = Math.max(0.55, rad * 11);
+  const count = 24;
+
+  for (let i = 0; i < count; i++) {
+    const dir = new THREE.Vector3(rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1);
+    if (dir.lengthSq() < 1e-4) { i--; continue; }
+    dir.normalize();
+
+    const r = spread * Math.cbrt(rand());
+    const pos = center.clone().addScaledVector(dir, r);
+
+    const scale = 0.20 + rand() * 0.18;
+    addLeafAt(pos, dir, scale, leafGeos);
+  }
+}
+
+/* ============================================================
+   CONSTRUÇÃO DA ÁRVORE
+   ============================================================ */
+const MAX_DEPTH = 5;
+const TILE = 1.2;
+
+function buildTree(seedValue) {
+  srand(seedValue);
+
+  const trunkGeos = [];
+  const leafGeos = [];
+
+  function grow(start, dir, len, rad, depth) {
+    const end = start.clone().addScaledVector(dir, len);
+
+    const perp = perpendicularTo(dir);
+    const bend = len * (0.05 + rand() * 0.10) * (depth === 0 ? 0.55 : 1.0);
+    const mid = start.clone().lerp(end, 0.5).addScaledVector(perp, bend);
+
+    const curve = new THREE.CatmullRomCurve3([start.clone(), mid, end.clone()]);
+    const rEnd = rad * 0.70;
+
+    const tubularSegments = Math.max(3, Math.round(len * 5));
+    const radialSegments  = Math.max(5, Math.min(12, Math.round(rad * 70)));
+
+    trunkGeos.push(
+      taperedTube(curve, (t) => THREE.MathUtils.lerp(rad, rEnd, t),
+        tubularSegments, radialSegments, TILE)
+    );
+
+    // folhas ao longo dos galhos finos
+    if (depth >= MAX_DEPTH - 1) {
+      const branchLeafCount = depth === MAX_DEPTH ? 12 : 6;
+      scatterLeavesAlongBranch(curve, 0.30, 1.0, rad, branchLeafCount, leafGeos);
+    }
+
+    // ponta: nuvem de folhas
+    if (depth >= MAX_DEPTH) {
+      scatterLeavesAtTip(end, rad, leafGeos);
+      return;
+    }
+
+    /* ---- ramificação ---- */
+    const nChildren = depth === 0 ? 3 : (rand() < 0.42 ? 3 : 2);
+    const endDir = curve.getTangent(1).normalize();
+
+    const helper = Math.abs(endDir.y) > 0.9
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0);
+
+    const U = new THREE.Vector3().crossVectors(endDir, helper).normalize();
+    const V = new THREE.Vector3().crossVectors(endDir, U).normalize();
+
+    const baseAz = rand() * Math.PI * 2;
+
+    for (let i = 0; i < nChildren; i++) {
+      const azim = baseAz + (i / nChildren) * Math.PI * 2 + (rand() - 0.5) * 0.9;
+      const tilt = THREE.MathUtils.degToRad(26 + rand() * 26) * (depth === 0 ? 0.82 : 1.0);
+
+      const childDir = endDir.clone()
+        .multiplyScalar(Math.cos(tilt))
+        .addScaledVector(U, Math.sin(tilt) * Math.cos(azim))
+        .addScaledVector(V, Math.sin(tilt) * Math.sin(azim))
+        .normalize();
+
+      childDir.y += 0.18;
+      childDir.normalize();
+
+      const childStart = start.clone().lerp(end, 0.88).addScaledVector(childDir, rad * 0.2);
+
+      grow(
+        childStart,
+        childDir,
+        len * (0.66 + rand() * 0.12),
+        rEnd * 0.92,
+        depth + 1
+      );
+    }
+  }
+
+  grow(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0), 2.7, 0.33, 0);
+
+  /* ---- merge ---- */
+  const trunkGeo = mergeGeometries(trunkGeos, false);
+  const leafGeo  = mergeGeometries(leafGeos, false);
+
+  trunkGeos.forEach((g) => g.dispose());
+  leafGeos.forEach((g) => g.dispose());
+
+  if (trunkMesh) { treeGroup.remove(trunkMesh); trunkMesh.geometry.dispose(); }
+  if (leafMesh)  { treeGroup.remove(leafMesh);  leafMesh.geometry.dispose(); }
+
+  trunkMesh = new THREE.Mesh(trunkGeo, trunkMat);
+  trunkMesh.castShadow = true;
+  trunkMesh.receiveShadow = true;
+
+  leafMesh = new THREE.Mesh(leafGeo, leafMat);
+  leafMesh.castShadow = true;
+  leafMesh.receiveShadow = true;
+
+  treeGroup.add(trunkMesh, leafMesh);
+
+  frameTree();
+}
+
+/* ============================================================
+   ENQUADRAMENTO
+   ============================================================ */
+function frameTree() {
+  const box = new THREE.Box3().setFromObject(treeGroup);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+
+  const radius = Math.max(size.x, size.y, size.z) * 0.5 || 1;
+
+  controls.target.copy(center);
+
+  const dist = (radius / Math.sin(THREE.MathUtils.degToRad(camera.fov * 0.5))) * 1.12;
+  camera.position.copy(center)
+    .add(new THREE.Vector3(0.85, 0.42, 1).normalize().multiplyScalar(dist));
+  camera.near = Math.max(0.05, dist * 0.01);
+  camera.far = dist * 30;
+  camera.updateProjectionMatrix();
+  controls.update();
+
+  const d = radius * 1.45;
+  dirLight.position.copy(center)
+    .add(new THREE.Vector3(1.0, 1.9, 1.2).normalize().multiplyScalar(radius * 4.5));
+  dirLight.target.position.copy(center);
+  dirLight.target.updateMatrixWorld();
+
+  const sc = dirLight.shadow.camera;
+  sc.left = -d;
+  sc.right = d;
+  sc.top = d;
+  sc.bottom = -d;
+  sc.near = 0.5;
+  sc.far = radius * 12;
+  sc.updateProjectionMatrix();
+
+  dirLight.shadow.normalBias = Math.max(0.01, radius * 0.012);
+}
+
+/* ============================================================
+   TEXTURAS DO USUÁRIO
+   ============================================================ */
+const textureLoader = new THREE.TextureLoader();
+
+function loadTextureFromFile(file, material, repeat, labelEl) {
+  const url = URL.createObjectURL(file);
+
+  textureLoader.load(
+    url,
+    (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(repeat, repeat);
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = true;
+
+      if (material.map) material.map.dispose();
+      material.map = tex;
+      material.color.set(0xffffff);
+      material.needsUpdate = true;
+
+      labelEl.textContent = file.name;
+      labelEl.classList.add('ok');
+
+      URL.revokeObjectURL(url);
+    },
+    undefined,
+    (err) => {
+      console.error('Falha ao carregar a textura:', err);
+      labelEl.textContent = 'erro ao carregar';
+      labelEl.classList.remove('ok');
+      URL.revokeObjectURL(url);
+    }
+  );
+}
+
+/* ============================================================
+   UI
+   ============================================================ */
+const leafInput  = document.getElementById('leafInput');
+const trunkInput = document.getElementById('trunkInput');
+const leafName   = document.getElementById('leafName');
+const trunkName  = document.getElementById('trunkName');
+const regenBtn   = document.getElementById('regenBtn');
+const resetBtn   = document.getElementById('resetBtn');
+
+leafInput.addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (file) loadTextureFromFile(file, leafMat, 1, leafName);
+});
+
+trunkInput.addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (file) loadTextureFromFile(file, trunkMat, 1, trunkName);
+});
+
+regenBtn.addEventListener('click', () => {
+  buildTree((Math.random() * 0xffffffff) >>> 0);
+});
+
+resetBtn.addEventListener('click', () => {
+  if (trunkMat.map) { trunkMat.map.dispose(); trunkMat.map = null; }
+  if (leafMat.map)  { leafMat.map.dispose();  leafMat.map = null; }
+  trunkMat.color.set(0x9b938a);
+  leafMat.color.set(0x99a08f);
+  trunkMat.needsUpdate = true;
+  leafMat.needsUpdate = true;
+
+  trunkInput.value = '';
+  leafInput.value = '';
+  trunkName.textContent = 'nenhuma imagem';
+  leafName.textContent = 'nenhuma imagem';
+  trunkName.classList.remove('ok');
+  leafName.classList.remove('ok');
+});
+
+/* ============================================================
+   START
+   ============================================================ */
+buildTree(20240607);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+renderer.setAnimationLoop(() => {
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
